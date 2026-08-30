@@ -1,0 +1,6 @@
+# `cargo xtask <command>` — the repository's own tooling, in the usual cargo-xtask shape.
+#
+# Without this alias `cargo xtask` is not a command, and every invocation in the README, the
+# website and CI fails with "no such command".
+[alias]
+xtask = "run --package xtask --"

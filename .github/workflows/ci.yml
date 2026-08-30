@@ -158,8 +158,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@nightly
-      - uses: taiki-e/install-action@cargo-fuzz
       - uses: Swatinem/rust-cache@v2
+      # `taiki-e/install-action` has no cargo-fuzz manifest, so it is built here and cached.
+      - run: cargo install cargo-fuzz --locked
       # Building them keeps the targets honest even on runs that do not fuzz.
       - run: cargo fuzz build --dev
 

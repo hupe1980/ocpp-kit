@@ -258,6 +258,8 @@ $ cargo xtask schema-report     # action, enum and type counts per version
 $ cargo xtask coverage          # which specification requirement IDs the tests cite
 $ cargo xtask coverage --profile core   # how much of a certification profile the tests drive
 $ cargo xtask appendix          # regenerate src/standard from Part 2 — Appendices
+$ cargo xtask ci                # run what CI runs, read out of the workflow itself
+$ cargo xtask ci --all          # …including the steps that need extra tooling
 $ cargo test --features full
 ```
 

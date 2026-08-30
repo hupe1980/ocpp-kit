@@ -6,9 +6,11 @@
 //! cargo xtask coverage [--block B] requirement-ID coverage from the test suite
 //! cargo xtask doctest-site       compile and run every Rust snippet on the website and in
 //!                                the README
+//! cargo xtask ci [--all]          run exactly what .github/workflows/ci.yml runs
 //! ```
 
 mod appendix;
+mod ci;
 mod emit;
 mod model;
 mod naming;
@@ -35,11 +37,13 @@ fn main() -> Result<()> {
         "schema-report" => schema_report(),
         "coverage" => coverage(&args[1..]),
         "doctest-site" => doctest_site(),
+        "ci" => ci::run(flags.contains("--all")),
         _ => {
             println!("{}", env!("CARGO_PKG_NAME"));
             println!(
                 "usage: cargo xtask <codegen [--check] | appendix [--check] | schema-report \
-                        | coverage [--block <B>] [--profile <NAME>] | doctest-site>"
+                        | coverage [--block <B>] [--profile <NAME>] | doctest-site \
+                        | ci [--all]>"
             );
             Ok(())
         }

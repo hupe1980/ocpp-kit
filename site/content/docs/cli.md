@@ -107,4 +107,5 @@ $ cargo xtask coverage                       # requirement IDs cited by the sour
 $ cargo xtask coverage --block B02           # …just one block
 $ cargo xtask coverage --profile core        # how much of a certification profile is driven
 $ cargo xtask schema-report                  # actions, enums and types per version and block
+$ cargo xtask ci                             # run what CI runs, before pushing
 ```

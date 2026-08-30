@@ -207,5 +207,10 @@ one has to learn.
 
 CI checks `cargo check --no-default-features --target thumbv7em-none-eabihf`, so the `no_std`
 claim is a build failure away from being noticed rather than a README assertion. And
+`cargo xtask ci` runs what CI runs — the commands are read out of
+`.github/workflows/ci.yml` rather than restated, so a local run cannot drift from the real
+one. `--all` includes the steps needing `cargo-hack`, `zola`, `cargo-fuzz` and the cross
+targets.
+
 `cargo xtask codegen --check` regenerates from the schemas and fails if the committed output
 differs, so a schema update is always a visible, reviewable diff.
