@@ -1,0 +1,24 @@
+OCPP JSON Schemas — vendored, unmodified
+========================================
+
+These JSON Schema files are published by the Open Charge Alliance (OCA)
+as part of the Open Charge Point Protocol specifications and are
+redistributed here byte-for-byte unmodified. They are NOT covered by the
+MIT/Apache-2.0 licenses that apply to the Rust code in this repository.
+
+  schemas/v16/   OCPP 1.6 (edition 2 + errata) — 78 files, JSON Schema draft-04
+                 © Open Charge Alliance. Published with the OCPP 1.6 specification.
+  schemas/v201/  OCPP 2.0.1 FINAL — 128 files, JSON Schema draft-06
+                 © Open Charge Alliance. Published with OCPP 2.0.1 Part 2.
+  schemas/v21/   OCPP 2.1 Edition 1 — 181 files, JSON Schema draft-06
+                 (c) OCA, Creative Commons Attribution-NoDerivatives 4.0
+                 International Public License, as stated in each file's
+                 "comment" field.
+
+Only the OCPP 2.1 files carry an explicit license statement. The 1.6 and
+2.0.1 files carry none, and are redistributed as they appear in the OCA
+publications and in https://github.com/mobilityhouse/ocpp (MIT), the source
+they were copied from on 2026-08-30. The OCPP specification PDFs are not
+redistributed with this repository.
+
+Open Charge Alliance: https://openchargealliance.org/
