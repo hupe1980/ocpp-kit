@@ -1,0 +1,69 @@
+{% set docs = get_section(path="docs/_index.md") %}
+<nav class="sidebar" aria-label="Documentation">
+  <input type="checkbox" id="nav-toggle" class="nav-toggle" hidden>
+  <label for="nav-toggle" class="nav-toggle-label">Documentation</label>
+
+  <div class="search">
+    <label class="visually-hidden" for="search-input">Search the documentation</label>
+    <input id="search-input" type="search" placeholder="Search…" autocomplete="off"
+           role="combobox" aria-expanded="false" aria-controls="search-results">
+    <ul id="search-results" class="search-results" role="listbox" hidden></ul>
+  </div>
+
+  <ul class="sidebar-links">
+    <li><a href="{{ docs.permalink }}"{% if current_path == docs.path %} aria-current="page"{% endif %}>Overview</a></li>
+    {% for p in docs.pages %}
+    <li><a href="{{ p.permalink }}"{% if current_path == p.path %} aria-current="page"{% endif %}>{{ p.title }}</a></li>
+    {% endfor %}
+  </ul>
+</nav>
+
+<script type="application/json" id="search-index">
+[
+{%- for p in docs.pages %}
+{"t": {{ p.title | json_encode | safe }},
+ "d": {{ p.description | default(value="") | json_encode | safe }},
+ "u": {{ p.permalink | json_encode | safe }},
+ "h": [{% for h in p.toc %}{{ h.title | json_encode | safe }}{% if not loop.last %},{% endif %}{% endfor %}]}{% if not loop.last %},{% endif %}
+{%- endfor %}
+]
+</script>
+<script>
+// A dependency-free filter over the page titles, ledes and headings. Fifteen pages do not
+// need a search engine.
+(() => {
+  const input = document.getElementById('search-input');
+  const list = document.getElementById('search-results');
+  const raw = document.getElementById('search-index');
+  if (!input || !list || !raw) return;
+
+  const pages = JSON.parse(raw.textContent).map(p => ({ ...p, hay: `${p.t} ${p.d} ${p.h.join(' ')}`.toLowerCase() }));
+
+  const render = items => {
+    list.innerHTML = items
+      .map(p => `<li role="option"><a href="${p.u}"><strong>${p.t}</strong><span>${p.d}</span></a></li>`)
+      .join('');
+    list.hidden = items.length === 0;
+    input.setAttribute('aria-expanded', String(items.length > 0));
+  };
+
+  input.addEventListener('input', () => {
+    const terms = input.value.toLowerCase().split(/\s+/).filter(Boolean);
+    render(terms.length === 0 ? [] : pages.filter(p => terms.every(t => p.hay.includes(t))).slice(0, 8));
+  });
+
+  input.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { input.value = ''; render([]); input.blur(); }
+    if (event.key === 'Enter') { const first = list.querySelector('a'); if (first) first.click(); }
+  });
+
+  document.addEventListener('click', event => {
+    if (!event.target.closest('.search')) render([]);
+  });
+
+  // `/` focuses the box, the way every documentation site people already use does.
+  document.addEventListener('keydown', event => {
+    if (event.key === '/' && document.activeElement !== input) { event.preventDefault(); input.focus(); }
+  });
+})();
+</script>

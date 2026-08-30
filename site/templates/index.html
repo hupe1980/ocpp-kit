@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+
+{% block seo_title %}ocpp-kit — OCPP 1.6, 2.0.1 and 2.1 for Rust{% endblock %}
+{% block og_title %}ocpp-kit — OCPP 1.6, 2.0.1 and 2.1 for Rust{% endblock %}
+{% block twitter_title %}ocpp-kit — OCPP 1.6, 2.0.1 and 2.1 for Rust{% endblock %}
+
+{% block content %}
+<section class="hero">
+  <div class="wrap">
+    <p class="eyebrow">OCPP 1.6J · 2.0.1 · 2.1</p>
+    <h1>The Open Charge Point Protocol,<br>done properly in Rust.</h1>
+    <p class="lede">
+      Typed messages for all 194 actions, a sans-I/O protocol engine, and production transports
+      for charging stations, CSMS backends and local controllers — with the version differences
+      modelled rather than averaged away.
+    </p>
+    <div class="cta">
+      <a class="button primary" href="{{ get_url(path='@/docs/getting-started.md') }}">Get started</a>
+      <a class="button" href="{{ config.extra.api }}" rel="noopener">API reference</a>
+      <a class="button ghost" href="{{ config.extra.repo }}" rel="noopener">GitHub</a>
+    </div>
+<pre class="install"><code>cargo add ocpp-kit --features tokio,rustls</code></pre>
+  </div>
+</section>
+
+<section class="wrap band">
+  <h2>Five layers. You pay for what you use.</h2>
+  <div class="grid">
+    <article class="card">
+      <h3>Typed messages</h3>
+      <p>All 39 / 64 / 91 actions for 1.6J, 2.0.1 and 2.1, generated from the official OCA JSON
+      schemas and checked back against them on every CI run.</p>
+      <a href="{{ get_url(path='@/docs/messages.md') }}">Layer 0 →</a>
+    </article>
+    <article class="card">
+      <h3>OCPP-J framing</h3>
+      <p><code>CALL</code>, <code>CALLRESULT</code>, <code>CALLERROR</code>, plus 2.1’s
+      <code>CALLRESULTERROR</code> and <code>SEND</code> — with the error codes each version
+      actually spells.</p>
+      <a href="{{ get_url(path='@/docs/framing.md') }}">Layer 1 →</a>
+    </article>
+    <article class="card">
+      <h3>Sans-I/O engine</h3>
+      <p>A pure state machine: no socket, no clock, no tasks. Every timing rule in OCPP is
+      testable in microseconds, on Tokio, on <code>embassy</code> or in WebAssembly.</p>
+      <a href="{{ get_url(path='@/docs/engine.md') }}">Layer 2 →</a>
+    </article>
+    <article class="card">
+      <h3>Transport</h3>
+      <p>Charging station, CSMS and Part 4 chapter 6 local controller, on Tokio and
+      <code>rustls</code>, with security profiles 1–3 and network failover.</p>
+      <a href="{{ get_url(path='@/docs/transport.md') }}">Layer 3 →</a>
+    </article>
+    <article class="card">
+      <h3>Domain blocks</h3>
+      <p>Device model, transaction rules, local authorization, composite schedules, and an
+      idempotent CSMS transaction ledger. Components, not a framework.</p>
+      <a href="{{ get_url(path='@/docs/domain.md') }}">Layer 4 →</a>
+    </article>
+    <article class="card">
+      <h3>The vocabulary</h3>
+      <p>Security events with their criticality, 74 standardized components, 448 variables and
+      the standardized reason codes — extracted from the specification, not transcribed.</p>
+      <a href="{{ get_url(path='@/docs/catalogues.md') }}">Catalogues →</a>
+    </article>
+  </div>
+</section>
+
+<section class="wrap band">
+  <h2>A charging station, end to end</h2>
+  <div class="split">
+    <div>
+{{ section.content | safe }}
+    </div>
+    <div class="notes">
+      <h3>What happens without asking</h3>
+      <ul>
+        <li>The identity becomes the last path segment, as Part 4 §3.1 prescribes.</li>
+        <li>Anything sent before the CSMS accepts the station is <em>queued</em> — B02.FR.02
+        forbids sending it — and released the moment it does.</li>
+        <li>Reconnects follow the back-off of Part 4 §5.4 and keep the queue, so a reconnect
+        does not repeat <code>BootNotification</code>.</li>
+        <li>Transaction messages are retried on the linear schedule §3.7.1 defines, in
+        chronological order, and queued durably while offline.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="wrap band">
+  <h2>Why another OCPP crate</h2>
+  <div class="grid">
+    <article class="card">
+      <h3>Error codes are exact</h3>
+      <p>OCPP has five distinct codes for five kinds of bad payload, and answering with the
+      wrong one is a conformance failure. A missing member is an
+      <code>OccurrenceConstraintViolation</code>; a string where an integer belongs is a
+      <code>TypeConstraintViolation</code>; on 1.6 a format violation is spelled
+      <code>FormationViolation</code>.</p>
+    </article>
+    <article class="card">
+      <h3>The types cannot drift</h3>
+      <p>Every action’s request and response is round-tripped through pseudo-random
+      schema-valid payloads and validated back against the official schema — over 9 000 round
+      trips per test run.</p>
+      <a href="{{ get_url(path='@/docs/testing.md') }}">How it is verified →</a>
+    </article>
+    <article class="card">
+      <h3>Compression, because 2.1 requires it</h3>
+      <p>Part 4 §3.4 makes RFC 7692 mandatory for a CSMS. No general-purpose Rust WebSocket
+      crate implements it, so the frame layer is in this crate — checked against an
+      independent implementation and fuzzed.</p>
+      <a href="{{ get_url(path='@/docs/websocket.md') }}">The WebSocket layer →</a>
+    </article>
+    <article class="card">
+      <h3>Real hardware, not just the spec</h3>
+      <p>The strict default is what the schemas say. A lenient policy additionally accepts
+      offset-less timestamps, numeric strings and undefined enum values — via a repair loop
+      that only runs after a strict parse has failed.</p>
+      <a href="{{ get_url(path='@/docs/interop.md') }}">Talking to real hardware →</a>
+    </article>
+  </div>
+</section>
+
+<section class="wrap band">
+  <h2>Runs where the protocol runs</h2>
+  <ul class="chips">
+    <li><code>no_std</code> + <code>alloc</code> for layers 0–4</li>
+    <li>Tokio</li>
+    <li>WebAssembly</li>
+    <li><code>thumbv7em-none-eabihf</code>, checked in CI</li>
+    <li><code>#![forbid(unsafe_code)]</code></li>
+    <li>MIT or Apache-2.0</li>
+  </ul>
+  <p class="muted">
+    With default features there is no async runtime, no TLS and no domain logic in your binary —
+    just the types, the framing and the engine.
+  </p>
+</section>
+{% endblock %}

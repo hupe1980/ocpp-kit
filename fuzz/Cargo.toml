@@ -1,0 +1,45 @@
+[package]
+name = "ocpp-kit-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1"
+bytes = "1"
+
+[dependencies.ocpp-kit]
+path = ".."
+features = ["v1_6", "v2_0_1", "v2_1", "station", "csms", "tokio", "compression", "signed-messages"]
+
+[[bin]]
+name = "frame"
+path = "fuzz_targets/frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "payload"
+path = "fuzz_targets/payload.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "engine"
+path = "fuzz_targets/engine.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "websocket"
+path = "fuzz_targets/websocket.rs"
+test = false
+doc = false
+bench = false

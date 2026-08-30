@@ -1,19 +1,134 @@
-[package]
-name = "ocpp-kit"
-version = "0.0.1"
+[workspace]
+members = ["xtask"]
+# `fuzz` is built by `cargo fuzz`, which needs nightly, so it stays out of the workspace.
+exclude = ["fuzz"]
+
+[workspace.package]
 edition = "2024"
 rust-version = "1.85"
-description = "Open Charge Point Protocol (OCPP 1.6J, 2.0.1, 2.1) toolkit for Rust: typed messages, OCPP-J framing, a sans-I/O protocol engine, and transports for charging stations, CSMS and local controllers. Placeholder release — name reserved, implementation in progress."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/hupe1980/ocpp-kit"
+
+[package]
+name = "ocpp-kit"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+description = "Open Charge Point Protocol (OCPP 1.6J, 2.0.1, 2.1) toolkit for Rust: typed messages, OCPP-J framing, a sans-I/O protocol engine, and transports for charging stations, CSMS and local controllers."
+license.workspace = true
+repository.workspace = true
 homepage = "https://github.com/hupe1980/ocpp-kit"
+documentation = "https://docs.rs/ocpp-kit"
 readme = "README.md"
 keywords = ["ocpp", "ev-charging", "emobility", "charging-station", "csms"]
 categories = ["network-programming", "api-bindings", "embedded"]
-exclude = ["specs/", "schemas/", "CONCEPT.md", ".github/"]
+# The schemas ship because `tests/schema_conformance.rs` reads them: they are what makes the
+# generated types verifiable rather than merely asserted.
+exclude = ["specs/", ".github/", "site/", "fuzz/"]
 
 [dependencies]
+serde = { version = "1.0.219", default-features = false, features = ["alloc", "derive"] }
+serde_json = { version = "1.0.140", default-features = false, features = ["alloc", "raw_value", "float_roundtrip"] }
+serde_path_to_error = { version = "0.1.20", default-features = false }
+jiff = { version = "0.2.15", default-features = false, features = ["alloc", "serde"] }
+
+# --- transport (feature "tokio") -------------------------------------------
+tokio = { version = "1.45", optional = true, features = ["rt", "net", "time", "sync", "macros", "io-util"] }
+futures-util = { version = "0.3.31", optional = true, default-features = false, features = ["sink", "std"] }
+base64 = { version = "0.22", optional = true, default-features = false, features = ["alloc"] }
+bytes = { version = "1.7", optional = true }
+http = { version = "1.1", optional = true }
+tokio-util = { version = "0.7.11", optional = true, default-features = false, features = ["codec", "io"] }
+getrandom = { version = "0.4", optional = true }
+sha1 = { version = "0.11", optional = true, default-features = false }
+p256 = { version = "0.14", optional = true, default-features = false, features = ["ecdsa", "alloc"] }
+sha2 = { version = "0.11", optional = true, default-features = false }
+zeroize = { version = "1.8", optional = true, features = ["zeroize_derive"] }
+tracing = { version = "0.1.41", optional = true, default-features = false, features = ["std", "attributes"] }
+flate2 = { version = "1.1", optional = true, default-features = false, features = ["rust_backend"] }
+
+# --- TLS --------------------------------------------------------------------
+tokio-rustls = { version = "0.26", optional = true, default-features = false, features = ["tls12", "ring", "logging"] }
+rustls-pki-types = { version = "1.11", optional = true, features = ["std"] }
+webpki-roots = { version = "1.0", optional = true }
+
+[dev-dependencies]
+criterion = { version = "0.7", default-features = false, features = ["cargo_bench_support"] }
+tokio = { version = "1.45", features = ["rt-multi-thread", "macros", "time", "net", "sync", "io-util"] }
+# A reference WebSocket implementation to check ours against — never a runtime dependency.
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+bytes = "1.7"
+base64 = "0.22"
+tokio-util = { version = "0.7.11", features = ["codec"] }
+futures-util = { version = "0.3.31", features = ["sink"] }
+
+# The examples are whole programs: a station and a CSMS. They need the transport and the
+# domain blocks, so `cargo test`/`cargo build` must not try to compile them without those.
+[[example]]
+name = "minimal_station"
+required-features = ["tokio", "station", "v2_1"]
+
+[[example]]
+name = "minimal_csms"
+required-features = ["tokio", "csms", "v2_1"]
+
+[[bench]]
+name = "hot_paths"
+harness = false
+required-features = ["v2_1"]
+
+[features]
+default = ["std", "v1_6", "v2_0_1", "v2_1"]
+std = ["serde/std", "serde_json/std", "jiff/std"]
+v1_6 = []
+v2_0_1 = []
+v2_1 = []
+station = []
+csms = []
+# Compression only exists in the transport, so it pulls it in rather than silently doing nothing.
+compression = ["tokio", "dep:flate2"]
+signed-messages = ["dep:base64"]
+# An entropy source. Enables `types::RandomIds`, which is what makes outgoing MessageIds
+# unique across reboots as Part 4 §4.1.4 requires. Implied by `tokio`.
+getrandom = ["dep:getrandom"]
+# Test scaffolding for downstream crates: a simulated driver for the sans-I/O engine, and
+# mock peers. Belongs in `[dev-dependencies]`.
+testkit = ["std"]
+jws-es256 = ["signed-messages", "dep:p256", "dep:sha2"]
+tokio = [
+    "std",
+    "dep:tokio",
+    "dep:futures-util",
+    "dep:base64",
+    "dep:bytes",
+    "dep:http",
+    "getrandom",
+    "dep:sha1",
+    "dep:tokio-util",
+    "dep:zeroize",
+]
+rustls = [
+    "tokio",
+    "dep:tokio-rustls",
+    "dep:rustls-pki-types",
+    "dep:webpki-roots",
+]
+tracing = ["dep:tracing"]
+cli = ["tokio", "station", "csms", "v1_6", "v2_0_1", "v2_1", "dep:tokio", "tokio/rt-multi-thread"]
+full = ["tokio", "rustls", "tracing", "station", "csms", "cli", "compression", "signed-messages", "jws-es256", "getrandom", "testkit"]
+
+[[bin]]
+name = "ocpp-cli"
+path = "src/bin/ocpp-cli.rs"
+required-features = ["cli"]
 
 [lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"

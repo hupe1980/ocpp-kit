@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block seo_title %}{{ page.title }} · ocpp-kit{% endblock %}
+{% block seo_description %}{{ page.description | default(value=config.description) }}{% endblock %}
+{% block canonical %}{{ page.permalink }}{% endblock %}
+{% block og_type %}article{% endblock %}
+{% block og_title %}{{ page.title }}{% endblock %}
+{% block og_description %}{{ page.description | default(value=config.description) }}{% endblock %}
+{% block og_url %}{{ page.permalink }}{% endblock %}
+{% block twitter_title %}{{ page.title }}{% endblock %}
+{% block twitter_description %}{{ page.description | default(value=config.description) }}{% endblock %}
+
+{% block structured_data %}{"@context":"https://schema.org","@type":"TechArticle","headline":"{{ page.title }}","description":"{{ page.description | default(value=config.description) }}","url":"{{ page.permalink }}","isPartOf":{"@type":"WebSite","name":"ocpp-kit","url":"{{ config.base_url }}/"},"author":{"@type":"Person","name":"{{ config.extra.author }}"},"inLanguage":"en"}{% endblock %}
+
+{% block content %}
+<div class="wrap docs">
+  {% include "_sidebar.html" %}
+  <article class="prose">
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="{{ get_url(path='@/docs/_index.md') }}">Docs</a> <span aria-hidden="true">/</span>
+      <span>{{ page.title }}</span>
+    </nav>
+    <h1>{{ page.title }}</h1>
+    {% if page.description %}<p class="page-lede">{{ page.description }}</p>{% endif %}
+    {{ page.content | safe }}
+
+    <nav class="pager" aria-label="Pagination">
+      {% if page.lower %}<a class="prev" href="{{ page.lower.permalink }}">&larr; {{ page.lower.title }}</a>{% endif %}
+      {% if page.higher %}<a class="next" href="{{ page.higher.permalink }}">{{ page.higher.title }} &rarr;</a>{% endif %}
+    </nav>
+    <p class="edit">
+      <a href="{{ config.extra.repo }}/edit/main/site/content/{{ page.relative_path }}" rel="noopener">Edit this page on GitHub</a>
+    </p>
+  </article>
+  {% if page.toc %}
+  <aside class="toc" aria-label="On this page">
+    <p class="toc-title">On this page</p>
+    <ul>
+      {% for h in page.toc %}
+      <li><a href="{{ h.permalink | safe }}">{{ h.title }}</a>
+        {% if h.children %}
+        <ul>{% for c in h.children %}<li><a href="{{ c.permalink | safe }}">{{ c.title }}</a></li>{% endfor %}</ul>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </aside>
+  {% endif %}
+</div>
+{% endblock %}

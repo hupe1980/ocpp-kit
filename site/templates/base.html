@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<title>{% block seo_title %}{{ config.title }} — OCPP 1.6, 2.0.1 and 2.1 for Rust{% endblock %}</title>
+<meta name="description" content="{% block seo_description %}{{ config.description }}{% endblock %}">
+<link rel="canonical" href="{% block canonical %}{{ config.base_url }}/{% endblock %}">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#0b1220" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+
+<meta property="og:type" content="{% block og_type %}website{% endblock %}">
+<meta property="og:site_name" content="{{ config.title }}">
+<meta property="og:title" content="{% block og_title %}{{ config.title }}{% endblock %}">
+<meta property="og:description" content="{% block og_description %}{{ config.description }}{% endblock %}">
+<meta property="og:url" content="{% block og_url %}{{ config.base_url }}/{% endblock %}">
+<meta property="og:image" content="{{ config.base_url }}{{ config.extra.og_image }}">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="ocpp-kit — Open Charge Point Protocol for Rust">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="{% block twitter_title %}{{ config.title }}{% endblock %}">
+<meta name="twitter:description" content="{% block twitter_description %}{{ config.description }}{% endblock %}">
+<meta name="twitter:image" content="{{ config.base_url }}{{ config.extra.og_image }}">
+
+<link rel="icon" href="{{ get_url(path='favicon.svg') }}" type="image/svg+xml">
+<link rel="icon" href="{{ get_url(path='favicon-32.png') }}" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="{{ get_url(path='apple-touch-icon.png') }}">
+<link rel="stylesheet" href="{{ get_url(path='style.css') }}">
+
+<script type="application/ld+json">
+{% block structured_data %}{"@context":"https://schema.org","@type":"SoftwareSourceCode","name":"ocpp-kit","description":"{{ config.description }}","codeRepository":"{{ config.extra.repo }}","programmingLanguage":{"@type":"ComputerLanguage","name":"Rust"},"license":"https://spdx.org/licenses/Apache-2.0.html","author":{"@type":"Person","name":"{{ config.extra.author }}"},"keywords":"OCPP, OCPP 2.1, OCPP 2.0.1, OCPP 1.6J, EV charging, CSMS, charging station, local controller, Rust, WebSocket"}{% endblock %}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="wrap topbar-inner">
+    <a class="brand" href="{{ get_url(path='@/_index.md') }}">
+      <img src="{{ get_url(path='favicon.svg') }}" width="26" height="26" alt="" aria-hidden="true">
+      <span>ocpp-kit</span>
+    </a>
+    <nav class="nav" aria-label="Main">
+      <a href="{{ get_url(path='@/docs/_index.md') }}">Docs</a>
+      <a href="{{ get_url(path='@/docs/getting-started.md') }}">Get started</a>
+      <a href="{{ config.extra.api }}" rel="noopener">API</a>
+      <a href="{{ config.extra.repo }}" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+{% block content %}{% endblock %}
+</main>
+
+<footer class="footer">
+  <div class="wrap footer-inner">
+    <p>
+      <strong>ocpp-kit</strong> — Open Charge Point Protocol for Rust.
+      Licensed <a href="{{ config.extra.repo }}#license" rel="noopener">MIT or Apache-2.0</a>.
+    </p>
+    <p class="muted">
+      OCPP is a trademark of the
+      <a href="https://openchargealliance.org/" rel="noopener nofollow">Open Charge Alliance</a>.
+      This project is not affiliated with or endorsed by the OCA.
+    </p>
+  </div>
+</footer>
+</body>
+</html>

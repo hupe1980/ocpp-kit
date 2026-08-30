@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0B1220"/>
+      <stop offset="1" stop-color="#101B2D"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#2DD4BF"/>
+      <stop offset="1" stop-color="#38BDF8"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect x="0" y="0" width="1200" height="6" fill="url(#glow)"/>
+
+  <g transform="translate(80,96) scale(1.5)">
+    <path d="M22 15h20a4 4 0 0 1 4 4v13a14 14 0 0 1-14 14h0a14 14 0 0 1-14-14V19a4 4 0 0 1 4-4z"
+          fill="none" stroke="#2DD4BF" stroke-width="3.5" stroke-linejoin="round"/>
+    <circle cx="26" cy="25" r="2.6" fill="#2DD4BF"/>
+    <circle cx="38" cy="25" r="2.6" fill="#2DD4BF"/>
+    <path d="M32 46v6a6 6 0 0 0 6 6h4" fill="none" stroke="#2DD4BF" stroke-width="3.5"
+          stroke-linecap="round"/>
+    <path d="M33.5 27.5 27 37h5l-1.5 7 7-10h-5z" fill="#F4FBFA"/>
+  </g>
+
+  <text x="80" y="300" font-family="ui-sans-serif, -apple-system, Helvetica, Arial, sans-serif"
+        font-size="86" font-weight="700" fill="#F8FAFC">ocpp-kit</text>
+  <text x="80" y="368" font-family="ui-sans-serif, -apple-system, Helvetica, Arial, sans-serif"
+        font-size="36" font-weight="500" fill="#94A3B8">Open Charge Point Protocol for Rust</text>
+  <text x="80" y="440" font-family="ui-sans-serif, -apple-system, Helvetica, Arial, sans-serif"
+        font-size="30" font-weight="400" fill="#2DD4BF">OCPP 1.6J · 2.0.1 · 2.1</text>
+
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="26" fill="#64748B">
+    <text x="80" y="530">typed messages · sans-I/O engine · charging station · CSMS · local controller</text>
+    <text x="80" y="572">no_std · permessage-deflate · signed messages · schema-verified</text>
+  </g>
+</svg>

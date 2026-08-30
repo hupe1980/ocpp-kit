@@ -20,7 +20,9 @@ target
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-# Internal docs / downloaded specifications (not committed)
+# Zola output
+site/public/
+
+# Downloaded specifications (not redistributable)
 specs/
-CONCEPT.md
 .DS_Store

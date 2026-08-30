@@ -1,0 +1,29 @@
+# https://www.getzola.org/documentation/getting-started/configuration/
+base_url = "https://hupe1980.github.io/ocpp-kit"
+title = "ocpp-kit"
+description = "An Open Charge Point Protocol toolkit for Rust — OCPP 1.6J, 2.0.1 and 2.1 over JSON/WebSocket, for charging stations, CSMS backends and local controllers."
+default_language = "en"
+compile_sass = true
+minify_html = true
+generate_feeds = false
+
+# `sitemap.xml` is generated automatically and referenced from `static/robots.txt`.
+taxonomies = []
+
+[markdown]
+smart_punctuation = false
+insert_anchor_links = "heading"
+
+[markdown.highlighting]
+# Two themes, switched by the reader's colour scheme rather than baked in.
+light_theme = "ayu-light"
+dark_theme = "ayu-dark"
+add_color_scheme = true
+
+[extra]
+repo = "https://github.com/hupe1980/ocpp-kit"
+crate = "https://crates.io/crates/ocpp-kit"
+api = "https://docs.rs/ocpp-kit"
+author = "hupe1980"
+# Used for Open Graph and Twitter cards.
+og_image = "/og.png"

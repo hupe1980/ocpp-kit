@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{% block seo_title %}{{ section.title }} · ocpp-kit{% endblock %}
+{% block seo_description %}{{ section.description | default(value=config.description) }}{% endblock %}
+{% block canonical %}{{ section.permalink }}{% endblock %}
+{% block og_title %}{{ section.title }}{% endblock %}
+{% block og_description %}{{ section.description | default(value=config.description) }}{% endblock %}
+{% block og_url %}{{ section.permalink }}{% endblock %}
+{% block twitter_title %}{{ section.title }}{% endblock %}
+{% block twitter_description %}{{ section.description | default(value=config.description) }}{% endblock %}
+
+{% block content %}
+<div class="wrap docs">
+  {% include "_sidebar.html" %}
+  <article class="prose">
+    <h1>{{ section.title }}</h1>
+    {{ section.content | safe }}
+  </article>
+</div>
+{% endblock %}

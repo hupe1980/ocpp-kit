@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="ocpp-kit">
+  <rect width="64" height="64" rx="14" fill="#0B1220"/>
+  <!-- Charging connector body -->
+  <path d="M22 15h20a4 4 0 0 1 4 4v13a14 14 0 0 1-14 14h0a14 14 0 0 1-14-14V19a4 4 0 0 1 4-4z"
+        fill="none" stroke="#2DD4BF" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="26" cy="25" r="2.6" fill="#2DD4BF"/>
+  <circle cx="38" cy="25" r="2.6" fill="#2DD4BF"/>
+  <!-- Cable -->
+  <path d="M32 46v6a6 6 0 0 0 6 6h4" fill="none" stroke="#2DD4BF" stroke-width="3.5"
+        stroke-linecap="round"/>
+  <!-- Bolt -->
+  <path d="M33.5 27.5 27 37h5l-1.5 7 7-10h-5z" fill="#F4FBFA"/>
+</svg>

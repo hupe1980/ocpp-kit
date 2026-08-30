@@ -41,7 +41,19 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  codegen:
+    name: generated code is current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      # Fails if src/v1_6, src/v2_0_1 or src/v2_1 differ from what the schemas produce.
+      - run: cargo xtask codegen --check
 
   test:
     name: test (${{ matrix.os }}, ${{ matrix.rust }})
@@ -61,7 +73,9 @@ jobs:
           toolchain: ${{ matrix.rust }}
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --all-features
-      - run: cargo test --no-default-features
+      # `testkit` is std-only and is what the engine tests are written against.
+      - run: cargo test --no-default-features --features v1_6,v2_0_1,v2_1,std,testkit
+      - run: cargo build --all-features --examples
 
   msrv:
     name: msrv
@@ -70,7 +84,7 @@ jobs:
       - uses: actions/checkout@v5
       - name: Read rust-version from Cargo.toml
         id: msrv
-        run: echo "version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].rust_version')" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name=="ocpp-kit") | .rust_version')" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ steps.msrv.outputs.version }}
@@ -85,7 +99,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@cargo-hack
       - uses: Swatinem/rust-cache@v2
-      - run: cargo hack check --feature-powerset --depth 2 --no-dev-deps
+      # `full` is just the union of the others, so exclude it from the powerset.
+      - run: cargo hack check -p ocpp-kit --feature-powerset --depth 2 --no-dev-deps --exclude-features full
 
   no_std:
     name: no_std (thumbv7em-none-eabihf)
@@ -96,7 +111,19 @@ jobs:
         with:
           targets: thumbv7em-none-eabihf
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --no-default-features --target thumbv7em-none-eabihf
+      # L0-L4 without std: this is what makes the firmware claim real.
+      - run: cargo check -p ocpp-kit --no-default-features --features v1_6,v2_0_1,v2_1,station,csms,signed-messages,jws-es256 --target thumbv7em-none-eabihf
+
+  wasm:
+    name: wasm32
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p ocpp-kit --no-default-features --features std,v1_6,v2_0_1,v2_1,station,csms,signed-messages,jws-es256 --target wasm32-unknown-unknown
 
   docs:
     name: docs
@@ -106,6 +133,35 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo doc --no-deps --all-features
+
+  site:
+    name: website
+    runs-on: ubuntu-latest
+    env:
+      ZOLA_VERSION: "0.23.4"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Zola
+        run: |
+          curl -sSfL "https://github.com/getzola/zola/releases/download/v${ZOLA_VERSION}/zola-v${ZOLA_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+            | sudo tar xz -C /usr/local/bin zola
+      - run: zola --root site build
+      # Every Rust snippet on the website and in the README is compiled and run, so neither
+      # can drift from the API.
+      - run: cargo xtask doctest-site
+
+  fuzz:
+    name: fuzz targets build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: taiki-e/install-action@cargo-fuzz
+      - uses: Swatinem/rust-cache@v2
+      # Building them keeps the targets honest even on runs that do not fuzz.
+      - run: cargo fuzz build --dev
 
   deny:
     name: cargo-deny
@@ -123,3 +179,5 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: obi1kenobi/cargo-semver-checks-action@v2
+        with:
+          feature-group: all-features

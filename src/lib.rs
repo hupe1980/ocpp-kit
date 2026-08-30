@@ -1,19 +1,48 @@
-//! # ocpp-kit
-//!
-//! An Open Charge Point Protocol (OCPP) toolkit for Rust, targeting OCPP 1.6J,
-//! 2.0.1 and 2.1 over JSON/WebSocket (OCPP-J).
-//!
-//! **This is a placeholder release that reserves the crate name.** It contains
-//! no functionality yet. The planned scope is:
-//!
-//! - typed, validated message payloads generated from the official JSON schemas,
-//! - OCPP-J framing (`CALL`, `CALLRESULT`, `CALLERROR`, `CALLRESULTERROR`, `SEND`),
-//! - a sans-I/O protocol engine usable from any runtime (including `no_std` + `alloc`),
-//! - Tokio/TLS transports for charging stations, CSMS and local controllers.
-//!
-//! Follow progress at <https://github.com/hupe1980/ocpp-kit>.
-#![no_std]
+#![cfg_attr(not(feature = "std"), no_std)]
 #![forbid(unsafe_code)]
+#![doc = include_str!("lib.md")]
 
-/// Crate version, as reserved on crates.io.
+extern crate alloc;
+
+#[cfg(feature = "std")]
+extern crate std;
+
+#[macro_use]
+mod macros;
+
+pub mod actions;
+#[cfg(feature = "csms")]
+pub mod csms;
+pub mod decode;
+pub mod engine;
+pub mod message;
+pub mod rpc;
+pub mod standard;
+#[cfg(feature = "station")]
+pub mod station;
+#[cfg(feature = "testkit")]
+pub mod testkit;
+#[cfg(feature = "tokio")]
+pub mod transport;
+pub mod types;
+pub mod validate;
+pub mod version;
+
+#[cfg(feature = "v1_6")]
+pub mod v1_6;
+#[cfg(feature = "v2_0_1")]
+pub mod v2_0_1;
+#[cfg(feature = "v2_1")]
+pub mod v2_1;
+
+pub use version::{Subprotocol, Version};
+
+/// An unparsed JSON value.
+///
+/// Re-exported from `serde_json` so payloads can be handled without adding a `serde_json`
+/// dependency of your own — and, more importantly, without the risk of linking a *different*
+/// `serde_json` than this crate did.
+pub use serde_json::value::RawValue;
+
+/// The version of this crate.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
