@@ -11,6 +11,7 @@
 //!
 //! `FILE` may be `-`, which reads standard input.
 
+use std::fmt::Write as _;
 use std::io::Read as _;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -19,6 +20,7 @@ use ocpp_kit::RawValue;
 use ocpp_kit::decode::DecodeOptions;
 use ocpp_kit::engine::IncomingRequest;
 use ocpp_kit::message::ActionName;
+use ocpp_kit::metering::SignedMeterValue;
 use ocpp_kit::rpc::{CallError, Frame};
 use ocpp_kit::transport::{
     Auth, AuthOutcome, BasicAuthPassword, BoxFuture, Csms, Ctx, Handler, SecurityProfile,
@@ -36,6 +38,7 @@ fn main() -> ExitCode {
         "validate" => validate(&mut args),
         "frame" => frame(&mut args),
         "replay" => replay(&mut args),
+        "signed" => signed(&mut args),
         "csms" => run_csms(&mut args),
         "station" => run_station(&mut args),
         "help" | "--help" | "-h" => {
@@ -64,8 +67,12 @@ USAGE:
   ocpp-cli validate [--version <V>] --action <A> [--response] [--lenient|--pedantic] [FILE]
   ocpp-cli frame    [--version <V>] [FILE]
   ocpp-cli replay   [--version <V>] [--lenient] <FILE>
+  ocpp-cli signed   [--key <PUBLICKEY>] [FILE]
   ocpp-cli csms     [--bind <ADDR>] [--version <V>]...
   ocpp-cli station  --url <URL> --identity <ID> [--password <PW>] [--version <V>]...
+
+`signed` reads a SignedMeterValueType object — or a 1.6 SignedData `value` string —
+and reports the record and the public key as the station meant them.
 
 FILE defaults to `-`, which reads standard input.
 A capture for `replay` is one OCPP-J frame per line; a line may be prefixed with
@@ -156,6 +163,92 @@ fn validate(args: &mut Args) -> Result<(), String> {
             ))
         }
     }
+}
+
+/// Reads a signed meter value the way a CSMS has to, and says what it found.
+///
+/// The two fields both hide something. `signedMeterData` is specified as Base64 but is often
+/// sent as `OCMF|…` text; `publicKey` is specified as an `oca:` envelope but is often sent as
+/// Base64 over plain hexadecimal, and the envelope's *printed* form is what a customer
+/// compares against the label on the meter. Getting either wrong is quiet: the station keeps
+/// sending and its sessions stop being billable. This is the loop for finding out which shape
+/// a particular station uses, before writing an integration around a guess.
+fn signed(args: &mut Args) -> Result<(), String> {
+    // `--key` on its own is the common case in the field — an operator has one key from a
+    // station and wants to know what it decodes to — so it does not also wait on stdin.
+    let key = args.value("--key")?;
+    let value = if key.is_some() {
+        args.finish()?;
+        None
+    } else {
+        let text = read_input(args)?;
+        let text = text.trim();
+        // Both shapes a signed meter value arrives in: the 2.x object, and the 1.6 string
+        // that holds the same object. A `value` string lifted out of a capture arrives with
+        // its JSON quoting still on, so that comes off first.
+        let document = serde_json::from_str::<String>(text).unwrap_or_else(|_| text.to_owned());
+        Some(SignedMeterValue::from_signed_data(&document).map_err(|error| error.to_string())?)
+    };
+
+    if let Some(value) = &value {
+        println!("encodingMethod: {}", show(value.encoding_method.as_deref()));
+        println!("signingMethod:  {}", show(value.signing_method.as_deref()));
+        if let Ok(record) = value.decoded_str() {
+            let shape = if record.starts_with("OCMF|") {
+                "OCMF text"
+            } else {
+                "text"
+            };
+            println!("record:         {} bytes, {shape}", record.len());
+            println!("\n{record}");
+        } else {
+            // Not UTF-8, so a binary encoding: the bytes are all there is to report.
+            let bytes = value.decoded().map_err(|error| error.to_string())?;
+            println!("record:         {} bytes, not text", bytes.len());
+        }
+    }
+
+    let field = key
+        .as_deref()
+        .or_else(|| value.as_ref().and_then(|value| value.public_key.as_deref()));
+    match field.map(ocpp_kit::metering::decode_public_key) {
+        None => println!("publicKey:      absent"),
+        Some(Err(error)) => println!("publicKey:      unreadable — {error}"),
+        Some(Ok(public_key)) => {
+            println!(
+                "publicKey:      {} bytes, sent as {:?}",
+                public_key.bytes.len(),
+                public_key.shape
+            );
+            if let Some(printed) = &public_key.printed {
+                // What a customer compares against the label on the certified meter.
+                println!("  printed:      {printed}");
+            }
+            if let Some(encoding) = &public_key.encoding {
+                println!("  encoding:     {encoding}");
+            }
+            if let Some(content_type) = &public_key.content_type {
+                println!("  contentType:  {content_type}");
+            }
+            println!("  hex:          {}", hex(&public_key.bytes));
+        }
+    }
+    eprintln!(
+        "note: the key is what the station *claims*. Verify against one obtained out of band."
+    );
+    Ok(())
+}
+
+fn show(value: Option<&str>) -> &str {
+    value.unwrap_or("<absent>")
+}
+
+fn hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(out, "{byte:02X}");
+    }
+    out
 }
 
 fn transcode(
@@ -301,7 +394,7 @@ fn run_csms(args: &mut Args) -> Result<(), String> {
                     "station {} connecting from {} ({})",
                     auth.identity, auth.remote, auth.profile
                 );
-                AuthOutcome::Accept
+                AuthOutcome::accept()
             })
             .handler(Echo)
             .build()

@@ -5,6 +5,7 @@
 //! and application commands into [`Input`]s.
 
 use std::collections::{BTreeMap, HashMap};
+use std::fmt;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -188,9 +189,68 @@ pub(crate) enum Command {
     },
 }
 
+/// Whatever an [`Authenticator`](super::Authenticator) resolved about a station, carried on
+/// its session.
+///
+/// A CSMS maps a connection's [`Identity`] to something of its own — a charge point row, a
+/// tenant, an EVSE inventory — and the lookup is the same one every deployment writes. Doing
+/// it once, in the authenticator that had to look the station up anyway, and hanging the
+/// result here spares every handler a second map keyed on `Identity` and the question of what
+/// to do when it misses.
+///
+/// ```
+/// # use ocpp_kit::transport::SessionContext;
+/// struct ChargePoint { row_id: u64 }
+///
+/// let context = SessionContext::new(ChargePoint { row_id: 42 });
+/// assert_eq!(context.get::<ChargePoint>().unwrap().row_id, 42);
+/// // Asking for a type that was never put in is `None`, not a panic.
+/// assert!(context.get::<String>().is_none());
+/// ```
+#[derive(Clone, Default)]
+pub struct SessionContext(Option<Arc<dyn core::any::Any + Send + Sync>>);
+
+impl SessionContext {
+    /// A context carrying nothing.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self(None)
+    }
+
+    /// A context carrying `value`.
+    #[must_use]
+    pub fn new<T: core::any::Any + Send + Sync>(value: T) -> Self {
+        Self(Some(Arc::new(value)))
+    }
+
+    /// The value, when one was stored and it has the type asked for.
+    #[must_use]
+    pub fn get<T: core::any::Any + Send + Sync>(&self) -> Option<&T> {
+        self.0.as_ref()?.downcast_ref::<T>()
+    }
+
+    /// Whether anything was stored.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.0.is_none()
+    }
+}
+
+impl fmt::Debug for SessionContext {
+    /// The value is opaque — it is whatever the application put there — so only its presence
+    /// is reported. Printing it would need a `Debug` bound the store deliberately does not
+    /// impose.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("SessionContext")
+            .field(&if self.is_empty() { "empty" } else { "set" })
+            .finish()
+    }
+}
+
 pub(crate) struct Shared {
     pub identity: Identity,
     pub remote: Option<SocketAddr>,
+    pub session: SessionContext,
     pub decode: DecodeOptions,
     pub commands: mpsc::Sender<Command>,
     pub events: broadcast::Sender<Event>,
@@ -224,6 +284,16 @@ impl Ctx {
     #[must_use]
     pub fn remote_addr(&self) -> Option<SocketAddr> {
         self.shared.remote
+    }
+
+    /// What the [`Authenticator`](super::Authenticator) resolved about this station, if it
+    /// stored anything of type `T`.
+    ///
+    /// See [`SessionContext`]. Always `None` on a Charging Station or Local Controller
+    /// session, which has no authenticator to store anything.
+    #[must_use]
+    pub fn session<T: core::any::Any + Send + Sync>(&self) -> Option<&T> {
+        self.shared.session.get::<T>()
     }
 
     /// The negotiated protocol version.
@@ -271,6 +341,13 @@ pub struct Handle {
 impl Handle {
     pub(crate) fn new(shared: Arc<Shared>) -> Self {
         Self { shared }
+    }
+
+    /// What the [`Authenticator`](super::Authenticator) resolved about this station, if it
+    /// stored anything of type `T`. See [`SessionContext`].
+    #[must_use]
+    pub fn session<T: core::any::Any + Send + Sync>(&self) -> Option<&T> {
+        self.shared.session.get::<T>()
     }
 
     /// The Charging Station identity this handle talks to.

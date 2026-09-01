@@ -132,7 +132,7 @@ let csms = Csms::builder()
     .handler(my_handler)
     .build()?;
 # Ok(()) }
-# async fn check(_: &Auth) -> AuthOutcome { AuthOutcome::Accept }
+# async fn check(_: &Auth) -> AuthOutcome { AuthOutcome::accept() }
 ```
 
 The HTTP upgrade is performed by this crate rather than handed to a WebSocket callback,
@@ -141,6 +141,37 @@ database lookup, so it has to be `async`; an unknown identity should be answered
 bad credentials **401**, so an operator can tell a typo from a wrong password (Part 4 §3.1.1);
 and a client whose subprotocols the CSMS cannot speak must get a *successful* handshake with
 no `Sec-WebSocket-Protocol` header, followed by an immediate close.
+
+### What the authenticator resolved rides the session
+
+An authenticator has already looked the station up to decide whether to admit it. Hanging that
+lookup on the session spares every handler a second map keyed on `Identity` — and spares it
+the question of what to do when that map misses for a station the authenticator definitely
+admitted:
+
+```rust,no_run
+use ocpp_kit::transport::{Auth, AuthOutcome, Ctx, SessionContext};
+
+struct ChargePoint { row_id: u64, tenant: String }
+
+async fn authenticate(auth: Auth) -> AuthOutcome {
+    match lookup(auth.identity.as_str()).await {
+        Some(point) => AuthOutcome::Accept(SessionContext::new(point)),
+        None => AuthOutcome::Unknown,
+    }
+}
+
+fn handle(ctx: &Ctx) {
+    // Present for every request on this session, with no lookup and no `expect`.
+    let point: &ChargePoint = ctx.session().unwrap();
+    let _ = (&point.row_id, &point.tenant);
+}
+# async fn lookup(_: &str) -> Option<ChargePoint> { None }
+```
+
+`Handle::session` reads the same value, so code calling *out* to a station sees the same
+resolution as code answering a call from one. `AuthOutcome::accept()` is the short spelling
+for admitting a station without storing anything.
 
 The router keeps one session per identity. A station that reconnects after a network partition
 supersedes its own zombie session: the old one is given `supersede_drain` to finish its

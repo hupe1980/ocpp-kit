@@ -11,7 +11,7 @@ repository = "https://github.com/hupe1980/ocpp-kit"
 
 [package]
 name = "ocpp-kit"
-version = "0.1.0"
+version = "0.2.0"
 edition.workspace = true
 rust-version.workspace = true
 description = "Open Charge Point Protocol (OCPP 1.6J, 2.0.1, 2.1) toolkit for Rust: typed messages, OCPP-J framing, a sans-I/O protocol engine, and transports for charging stations, CSMS and local controllers."
@@ -35,7 +35,9 @@ jiff = { version = "0.2.15", default-features = false, features = ["alloc", "ser
 # --- transport (feature "tokio") -------------------------------------------
 tokio = { version = "1.45", optional = true, features = ["rt", "net", "time", "sync", "macros", "io-util"] }
 futures-util = { version = "0.3.31", optional = true, default-features = false, features = ["sink", "std"] }
-base64 = { version = "0.22", optional = true, default-features = false, features = ["alloc"] }
+# Not optional: `metering` decodes the public-key envelope of a signed meter value, and
+# that is protocol knowledge every consumer needs rather than an opt-in extra.
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 bytes = { version = "1.7", optional = true }
 http = { version = "1.1", optional = true }
 tokio-util = { version = "0.7.11", optional = true, default-features = false, features = ["codec", "io"] }
@@ -77,6 +79,42 @@ name = "hot_paths"
 harness = false
 required-features = ["v2_1"]
 
+# The integration tests each need a slice of the feature set. Declaring it here rather than
+# with an inner `#![cfg(…)]` means `cargo test` skips the ones it cannot build instead of
+# failing to compile them — and an editor building with the default features stops reporting
+# an unresolved import that is only unresolved because the feature is off.
+[[test]]
+name = "decode_classification"
+required-features = ["v2_1"]
+
+[[test]]
+name = "domain_events"
+required-features = ["csms", "v1_6", "v2_0_1", "v2_1"]
+
+[[test]]
+name = "engine_rules"
+required-features = ["testkit"]
+
+[[test]]
+name = "properties"
+required-features = ["station", "csms"]
+
+[[test]]
+name = "schema_conformance"
+required-features = ["v1_6", "v2_0_1", "v2_1"]
+
+[[test]]
+name = "testkit"
+required-features = ["testkit", "v2_1"]
+
+[[test]]
+name = "transport_e2e"
+required-features = ["tokio"]
+
+[[test]]
+name = "websocket_interop"
+required-features = ["tokio"]
+
 [features]
 default = ["std", "v1_6", "v2_0_1", "v2_1"]
 std = ["serde/std", "serde_json/std", "jiff/std"]
@@ -87,7 +125,7 @@ station = []
 csms = []
 # Compression only exists in the transport, so it pulls it in rather than silently doing nothing.
 compression = ["tokio", "dep:flate2"]
-signed-messages = ["dep:base64"]
+signed-messages = []
 # An entropy source. Enables `types::RandomIds`, which is what makes outgoing MessageIds
 # unique across reboots as Part 4 §4.1.4 requires. Implied by `tokio`.
 getrandom = ["dep:getrandom"]
@@ -99,7 +137,6 @@ tokio = [
     "std",
     "dep:tokio",
     "dep:futures-util",
-    "dep:base64",
     "dep:bytes",
     "dep:http",
     "getrandom",

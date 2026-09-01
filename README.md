@@ -26,6 +26,7 @@ $ cargo add ocpp-kit --features tokio,rustls
 | **L3** | `transport` | Tokio + `rustls`, with its own RFC 6455 WebSocket and RFC 7692 compression: charging station, CSMS and local controller; security profiles 1–3; network failover | – |
 | **L4** | `station` · `csms` | Opt-in blocks: device model, 1.6 configuration keys, transaction rules, local authorization, composite schedules, an idempotent CSMS ledger, version-agnostic events | partial |
 | — | `standard` | The catalogues that live outside the schemas: security events with their criticality, 74 standardized components, 448 variables, reason codes | ✅ `alloc` |
+| — | `metering` | Signed meter values: where each version hides the record a customer may be billed for, and how to read its public-key envelope | ✅ `alloc` |
 
 With default features there is no async runtime, no TLS and no domain logic in your binary —
 just the types, the framing and the engine.
@@ -121,6 +122,33 @@ Controller are built from the same engine. The local controller opens one upstre
 per attached station under the station's own identity, propagates closes in both directions,
 and relays the OCPP-J text unchanged so signed messages survive.
 
+**The value that pays for the electricity.** Under German calibration law a customer may only
+be billed for a value they can check, which is the record the *meter* signed — not the
+protocol's own number, and often not even the same quantity: in the OCA's own example message
+a 1.6 `meterStop` is the meter's **lifetime** register while the signed record beside it
+reports the session. `ocpp_kit::metering` carries that record verbatim in both directions, and
+knows both of its hiding places: 1.6, which has no `signedMeterValue` field, puts the whole
+2.x object inside the `value` **string** of a `SignedData` sample, and `publicKey` is an
+`oca:` envelope in the specification but plain Base64-over-hex in the same document's own
+example. Both shapes are in the field; both are read, and the result says which arrived. See
+[signed meter values](https://hupe1980.github.io/ocpp-kit/docs/metering/).
+
+**Nothing that decides money fails silently.** A station that *claims* to send signed meter
+data and sends something unparseable looks, through a version-neutral view, exactly like one
+sending none — until a month of sessions turns out to be unbillable. Every such drop raises an
+`Observed::warnings` entry naming what arrived. The funnel also carries what a CDR needs and a
+meter reading cannot supply: the `charging_state` — a register at zero is a taper if the
+station says `Charging` and an occupancy fee if it says `SuspendedEV` — and the EVSE or
+connector the session is at.
+
+**Numbers are exact, not `f64`.** Every OCPP `number` — a meter register, a charging limit, a
+2.1 tariff price — is a `types::Decimal`: a mantissa and a decimal scale. A meter reporting
+`2935.600` kWh is claiming three decimals of resolution, and it goes back out as `2935.600`;
+a session's energy, which OCPP *defines* as a difference of two registers, is that difference
+exactly rather than `10.000000000000002`; and unit conversion moves the decimal point instead
+of multiplying by `1000.0`. `cargo xtask no-floats` fails the build if an `f32` or `f64`
+reaches any public signature, and CI runs it.
+
 **The types are checked against the schemas.** Every action's request and response is
 round-tripped through pseudo-random schema-valid payloads in CI, and the result is validated
 back against the official schema — 9 000+ round trips per run. The types cannot quietly drop
@@ -173,6 +201,8 @@ with the citation next to them:
 | Basic-auth password | `AuthorizationKey`, hexadecimal | `BasicAuthPassword`, UTF-8, ≥ 16 chars, ceiling 40–64 | same |
 | `permessage-deflate` | discouraged | – | CSMS and LC **shall** support — [implemented](https://hupe1980.github.io/ocpp-kit/docs/websocket/) |
 | Transaction ordering | strictly chronological (§3.7) | same | same |
+| Charging point | `connectorId`, no EVSEs | `evseId` | same |
+| Signed meter values | serialized into a `SignedData` sample's `value` **string** | `SampledValue.signedMeterValue` | same, with fewer required members |
 
 **You can test your own code with the tools this crate tests itself with.** `testkit` ships
 `Sim` and `Recorder` — what the protocol-rule tests here are written against — and mock
@@ -215,6 +245,7 @@ NotifyDERAlarm                       R                        CALL    CS  -> CSM
 …
 
 $ ocpp-cli replay capture.ocppcap --version 2.1     # validate a whole capture
+$ ocpp-cli signed --key MzA1OTMwMTMw…                # read a signed meter value as a CSMS must
 $ ocpp-cli csms --bind 127.0.0.1:9000               # a mock CSMS
 $ ocpp-cli station --url ws://… --identity CS-0001  # a mock charging station
 ```
@@ -237,8 +268,8 @@ $ ocpp-cli station --url ws://… --identity CS-0001  # a mock charging station
 | `cli` | – | The `ocpp-cli` binary |
 | `full` | – | Everything above |
 
-`ocpp_kit::standard` — the security events, standardized components and reason codes — is
-always available; it is data, not machinery.
+`ocpp_kit::standard` — the security events, standardized components and reason codes — and
+`ocpp_kit::metering` are always available: protocol knowledge, not machinery.
 
 ## Documentation
 
@@ -258,8 +289,9 @@ $ cargo xtask schema-report     # action, enum and type counts per version
 $ cargo xtask coverage          # which specification requirement IDs the tests cite
 $ cargo xtask coverage --profile core   # how much of a certification profile the tests drive
 $ cargo xtask appendix          # regenerate src/standard from Part 2 — Appendices
-$ cargo xtask ci                # run what CI runs, read out of the workflow itself
-$ cargo xtask ci --all          # …including the steps that need extra tooling
+$ cargo xtask no-floats         # fail if an f32/f64 reaches a public signature
+$ cargo xtask ci                # run what CI runs — commands *and* env — from the workflow
+$ cargo xtask ci --all          # …even the ones whose tooling looks to be missing
 $ cargo test --features full
 ```
 

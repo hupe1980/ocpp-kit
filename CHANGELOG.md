@@ -4,7 +4,111 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0] — unreleased
+## [0.2.0] — unreleased
+
+A hard cut, driven by what a CSMS billing under German calibration law could not get out of
+`0.1.0`: an exact number type, and the signed meter record itself.
+
+### Changed
+
+**Every OCPP `number` is an exact decimal.** `types::Decimal` is a signed mantissa and a
+decimal scale, not an `f64`. The scale the station sent survives end to end — a meter's
+`2935.600` decodes, compares, prints and re-encodes as `2935.600` — the subtraction OCPP
+*defines* a session's energy as is exact, and unit conversion (`kWh`, and the 2.x
+`unitOfMeasure.multiplier`) moves the decimal point rather than multiplying by `1000.0`.
+Literals are `decimal!(32.5)`, parsed at compile time. There is no `From<f64>`; the conversions
+are named `Decimal::to_f64_lossy` and `Decimal::from_f64_lossy`.
+
+The same change reaches the composite-schedule calculation (limits, `Supply::voltage`, the
+ampere/watt conversion), the device model's numeric limits, and the ledger's meter registers.
+`engine::Backoff::delay` takes an integer `engine::Jitter`. `cargo xtask no-floats` fails the
+build if an `f32` or `f64` reaches any public signature, and CI runs it.
+
+**The version-agnostic funnel carries what a CDR needs.** The transaction events gained
+`signed`, `charging_state`, `evse_id` and `connector_id`; `Record` gained `signed`, `evse_id`
+and `connector_id`, and `signed_with_context` to tell a begin record from an end one. 1.6 has
+connectors and no EVSEs and says so everywhere, rather than reporting a connector number as an
+EVSE id in `MeterValues`.
+
+**`AuthOutcome::Accept` carries a `SessionContext`** — whatever an `Authenticator` resolved
+about a station while deciding to admit it rides the session, and is read back by
+`Ctx::session` and `Handle::session`. A CSMS keeps no second map keyed on `Identity`, and does
+not have to decide what to do when that map misses for a station it definitely admitted.
+`AuthOutcome::accept()` is the short spelling for storing nothing.
+
+**`base64` is no longer optional.** Reading a public-key envelope is protocol knowledge, not an
+opt-in extra.
+
+### Added
+
+**`metering` — signed meter values**, the record a customer may actually be billed for. Under
+`MessEG` §33 a billable value is one the customer can check, which is the data set the meter
+signed — not the protocol's own number, and often not the same quantity: in the OCA's example
+message a 1.6 `meterStop` is the meter's *lifetime* register while the signed record beside it
+reports the session.
+
+* 1.6 has no `signedMeterValue` field. The OCA application note (§3.2.1) reuses 2.x's
+  `SignedMeterValueType` by serializing the whole object into the `value` **string** of a
+  `SampledValue` whose `format` is `SignedData` — a string holding JSON holding Base64 holding
+  the record. `v1_6::SampledValue::signed_meter_value` reads it, and `SampledValue::signed`
+  writes it, setting the `format` a station writing the shape by hand forgets.
+* `SignedMeterValueType.publicKey` is not key bytes. §3.2.2 specifies Base64 over an
+  `oca:<encoding>:<content-type>:<printed key>` envelope, where the last part is the key as
+  printed on the meter so a customer can compare it with the label; the same document's example
+  message sends Base64 over plain hexadecimal with no envelope. `metering::decode_public_key`
+  reads both and reports which arrived, keeping the printed form. It is a claim, not a binding:
+  OCMF wants the key out of band.
+* `SignedMeterValue::decoded` / `decoded_str` return the record whether the station sent it
+  Base64 — as 2.0.1 Part 2 §2.46 specifies — or put the `OCMF|` text in plain, which many do.
+  The two cannot collide, because `|` is not in the Base64 alphabet.
+* Every record reaches the funnel untouched, and converts back with `TryFrom` for the 2.x
+  types, failing with the member the target version requires: 2.0.1 makes all four mandatory,
+  2.1 only the record and its encoding.
+
+**`Observed::warnings`** reports what a message said that the version-neutral view could not
+carry, where the drop would otherwise be silent and about a value that decides money: an
+unreadable 1.6 `SignedData` document, a reading that is not a number, an energy register in a
+unit that is not an energy unit, one out of range. A station that *claims* to sign and does not
+is otherwise indistinguishable from one that does not claim, and the difference surfaces when a
+month of sessions turns out to be unbillable. No schema catches these — 1.6 types a sampled
+value as a plain string, and 2.x puts no bound on the multiplier.
+
+**`csms::events::to_ledger_event_with_id`** completes a 1.6 start event with the transaction id
+the CSMS assigned in `StartTransaction.conf`. Without it the start register is lost and the
+first periodic `MeterValues` silently takes its place.
+
+**`ocpp-cli signed`** reads a `SignedMeterValueType`, or the 1.6 `SignedData` string that holds
+one, and reports the record and the key as the station meant them.
+
+**`cargo xtask no-floats`** fails the build on an `f32` or `f64` in any public signature.
+
+**`COVERED_ACTIONS` is checked, not trusted.** A schema-driven test generates a valid request
+for every action of every version — 77 station-originated ones — and asserts that each maps to
+a modelled event exactly when the list says it does.
+
+### Fixed
+
+* A 1.6 sampled value that is not a number became an `f64::NAN` that poisoned every total it
+  reached. It is skipped, and reported as a warning.
+* The 2.x `unitOfMeasure.multiplier` was ignored — a factor-10ⁿ error in an invoice.
+* An `Ended` transaction event took the first matching sample rather than the closing one, so
+  a message carrying both a periodic and a `Transaction.End` reading billed the wrong end.
+* A 1.6 `StopTransaction.transactionData` was ignored entirely, which is where every
+  calibration-law-compliant 1.6 station puts its billable records.
+* A 1.6 `MeterValues` naming a `transactionId` never reached the ledger, so the claim that
+  `StartTransaction` / `MeterValues` / `StopTransaction` are one shape was not true.
+* 1.6 deduplication did not cover a retried `MeterValues`, though the ledger documented that it
+  did — two readings of the same kind bearing the same instant are one reading sent twice.
+* The composite schedule compared limits with `f64::EPSILON`, which is the wrong tolerance at
+  both ends of the range it has to cover. Exact decimals compare exactly.
+* `cargo test` with default features did not compile: the integration tests now declare their
+  `required-features`.
+* `cargo xtask ci` skipped six checks from a hardcoded list — including the feature powerset,
+  on a machine that had `cargo-hack`. It reads the workflow's `env:` block as well as its
+  `- run:` commands, so `RUSTFLAGS: -D warnings` means the same thing locally, and decides what
+  to skip by probing for the tool.
+
+## [0.1.0] — 2026-08-30
 
 The first functional release. `0.0.1` reserved the crate name and contained nothing.
 
@@ -123,4 +227,5 @@ property tests over the engine, the ledger and the composite-schedule calculatio
 interop against an independent implementation; end-to-end tests over real sockets; four
 `cargo fuzz` targets; and `thumbv7em-none-eabihf` (`no_std`) and `wasm32` builds in CI.
 
+[0.2.0]: https://github.com/hupe1980/ocpp-kit/releases/tag/v0.2.0
 [0.1.0]: https://github.com/hupe1980/ocpp-kit/releases/tag/v0.1.0

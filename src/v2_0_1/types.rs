@@ -1772,17 +1772,17 @@ impl Validate for DCChargingParameters {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("stateOfCharge");
         if let Some(value) = &self.state_of_charge {
-            validate::int_range(i64::from(*value), Some(0.0), Some(100.0), path, out);
+            validate::int_range(i64::from(*value), Some(0), Some(100), path, out);
         }
         path.pop();
         path.push_key("fullSoC");
         if let Some(value) = &self.full_so_c {
-            validate::int_range(i64::from(*value), Some(0.0), Some(100.0), path, out);
+            validate::int_range(i64::from(*value), Some(0), Some(100), path, out);
         }
         path.pop();
         path.push_key("bulkSoC");
         if let Some(value) = &self.bulk_so_c {
-            validate::int_range(i64::from(*value), Some(0.0), Some(100.0), path, out);
+            validate::int_range(i64::from(*value), Some(0), Some(100), path, out);
         }
         path.pop();
         path.push_key("customData");
@@ -3504,7 +3504,7 @@ impl Validate for SalesTariffEntry {
         path.pop();
         path.push_key("ePriceLevel");
         if let Some(value) = &self.e_price_level {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("consumptionCost");

@@ -11,12 +11,38 @@
 //! questions: have I seen this event, am I missing any, and is this transaction still open.
 //! It works the same for 1.6, where `StartTransaction` / `MeterValues` / `StopTransaction`
 //! are folded into the same shape.
+//!
+//! # What the energy figures are, and are not
+//!
+//! [`Record::energy_wh`] is the difference of the station's own start and stop registers,
+//! computed exactly: the readings are [`Decimal`]s at the resolution the meter wrote, and the
+//! subtraction is the one OCPP defines a session's energy as. Nothing here is rounded and
+//! nothing goes through an `f64`, so the figure can be carried into an invoice without
+//! having quietly lost exactness on the way.
+//!
+//! Exact is not the same as *authoritative*, and the distinction is worth keeping:
+//!
+//! * **The registers may not even be the quantity you want.** In the Open Charge Alliance's
+//!   own example message a 1.6 `StopTransaction` reports `meterStop: 108814` — the meter's
+//!   *lifetime* total in Wh — while the signed record beside it reports the transaction
+//!   running `0.000 → 0.636` kWh. `energy_wh` subtracts what the station reported, exactly;
+//!   whether those two readings are the session's is the station's claim, not this ledger's.
+//! * **It is what the station said**, over a transport with no integrity guarantee beyond
+//!   TLS. Where calibration law requires the billable kWh to be traceable to the meter itself
+//!   — Germany's Eichrecht, for one — the basis is the signed record, carried through as
+//!   [`Record::signed`] and verified against the meter's public key obtained somewhere other
+//!   than this socket. See [`crate::metering`].
+//! * A gap ([`Ingested::AppliedWithGap`]) or an event after the end
+//!   ([`Ingested::AfterEnd`]) says the record is incomplete, not that the energy is wrong —
+//!   but a transaction that ends without a `Started` event has no start register, and
+//!   `energy_wh` returns `None` rather than guessing at one.
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::types::{DateTime, Identity};
+use super::events::SignedReading;
+use crate::types::{DateTime, Decimal, Identity};
 
 /// Which phase of a transaction an event belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -40,6 +66,11 @@ pub struct TransactionEvent {
     pub identity: Identity,
     /// The transaction id.
     pub transaction_id: String,
+    /// The EVSE the transaction is at, when the message named one.
+    pub evse_id: Option<i32>,
+    /// The connector, when the message named one. 1.6 names one on `StartTransaction` and on
+    /// `MeterValues`, and none on `StopTransaction`.
+    pub connector_id: Option<i32>,
     /// Its position in the transaction.
     pub seq_no: i32,
     /// Which phase it belongs to.
@@ -48,8 +79,14 @@ pub struct TransactionEvent {
     pub timestamp: DateTime,
     /// Whether the station was offline when it happened.
     pub offline: bool,
-    /// The energy register, in Wh, if the event carried one.
-    pub meter_wh: Option<f64>,
+    /// The energy register, in Wh, if the event carried one — exactly as the meter stated
+    /// it, trailing zeros and all.
+    pub meter_wh: Option<Decimal>,
+    /// Every signed meter value the event carried, in the order they arrived.
+    ///
+    /// Where calibration law applies this — not [`meter_wh`](Self::meter_wh) — is the
+    /// billable value. See [`crate::metering`].
+    pub signed: Vec<SignedReading>,
     /// The token that authorized the transaction.
     pub id_token: Option<String>,
     /// Why the transaction stopped, on an `Ended` event.
@@ -69,20 +106,34 @@ impl TransactionEvent {
         Self {
             identity,
             transaction_id: transaction_id.into(),
+            evse_id: None,
+            connector_id: None,
             seq_no,
             kind,
             timestamp,
             offline: false,
             meter_wh: None,
+            signed: Vec::new(),
             id_token: None,
             stopped_reason: None,
         }
     }
 
-    /// Attaches the energy register.
+    /// Attaches the energy register, in Wh.
+    ///
+    /// Takes anything that converts into a [`Decimal`] — an integer, or a
+    /// [`decimal!`](crate::decimal) literal. It deliberately does not take an `f64`: a
+    /// register that has been through a float has already lost the resolution it claimed.
     #[must_use]
-    pub fn with_meter(mut self, wh: f64) -> Self {
-        self.meter_wh = Some(wh);
+    pub fn with_meter(mut self, wh: impl Into<Decimal>) -> Self {
+        self.meter_wh = Some(wh.into());
+        self
+    }
+
+    /// Attaches a signed meter value.
+    #[must_use]
+    pub fn with_signed(mut self, signed: SignedReading) -> Self {
+        self.signed.push(signed);
         self
     }
 
@@ -128,6 +179,16 @@ pub struct Record {
     pub identity: Identity,
     /// The transaction id.
     pub transaction_id: String,
+    /// The EVSE the transaction is at, from the first event that named one.
+    ///
+    /// A CDR names the point the session happened at, and only some of a transaction's
+    /// messages carry it: 1.6 puts a `connectorId` on `StartTransaction` and none on
+    /// `StopTransaction`, and 2.x's `evse` is optional on every `TransactionEvent`. Keeping
+    /// the first one seen spares a CSMS remembering it for the rest of the transaction.
+    pub evse_id: Option<i32>,
+    /// The connector, from the first event that named one. 1.6 has connectors and no EVSEs,
+    /// so this is what it fills in.
+    pub connector_id: Option<i32>,
     /// When it started, once a `Started` event has arrived.
     pub started_at: Option<DateTime>,
     /// When it ended.
@@ -141,16 +202,30 @@ pub struct Record {
     /// The `Started` event's, whenever one arrives — not merely the first reading seen. The
     /// two differ exactly when events arrive out of order, which is the case this ledger
     /// exists to survive.
-    pub meter_start_wh: Option<f64>,
+    pub meter_start_wh: Option<Decimal>,
     /// The reading the transaction ended at.
     ///
     /// The `Ended` event's once it has arrived; before that, the latest reading seen. A
     /// straggling `Updated` that turns up afterwards does not overwrite it, or the billed
     /// energy would shrink — and could go negative — as late events landed.
-    pub meter_stop_wh: Option<f64>,
+    pub meter_stop_wh: Option<Decimal>,
+    /// Every signed meter value the transaction's events carried, in arrival order.
+    ///
+    /// This is what a calibration-law billing chain settles on; the plain registers above are
+    /// what the CSMS uses to operate. See the [module documentation](self).
+    ///
+    /// It is one list rather than a start and a stop because 1.6 does not give the two their
+    /// own messages: a `StartTransaction` has nowhere to carry a signed record, so both the
+    /// begin and the end record arrive together in `StopTransaction.transactionData`. Tell
+    /// them apart with [`signed_with_context`](Self::signed_with_context).
+    pub signed: Vec<SignedReading>,
     /// Whether any event was produced while the station was offline.
     pub had_offline_events: bool,
     seen: BTreeSet<i32>,
+    /// `(kind, timestamp)` of every event taken through
+    /// [`ingest_unsequenced`](Ledger::ingest_unsequenced), which is all 1.6 has to recognise
+    /// a retry by.
+    unsequenced: BTreeSet<(EventKind, DateTime)>,
     highest: i32,
 }
 
@@ -175,13 +250,33 @@ impl Record {
         self.seen.len()
     }
 
-    /// The energy delivered, when both a start and a stop reading are known.
+    /// The signed meter values whose sample named `context` — `Transaction.Begin`,
+    /// `Transaction.End`, and the rest of `ReadingContextEnumType`.
+    ///
+    /// The context is the sample's, not the signed record's own: an OCMF data set states its
+    /// own begin/end marking inside the blob, and reading that is the consumer's business.
+    pub fn signed_with_context<'a>(
+        &'a self,
+        context: &'a str,
+    ) -> impl Iterator<Item = &'a SignedReading> {
+        self.signed
+            .iter()
+            .filter(move |signed| signed.context.as_deref() == Some(context))
+    }
+
+    /// The energy delivered, in Wh, when both a start and a stop reading are known.
+    ///
+    /// Exact: the difference of two decimal registers, at the finer of their two scales. No
+    /// rounding, no `f64`, and no drift of the kind that makes `10.1 - 0.1` come out as
+    /// `10.000000000000002`.
+    ///
+    /// The result is negative if the stop register is below the start one, which means the
+    /// meter was replaced or rolled over mid-transaction — a real condition, and one the
+    /// caller should see rather than have silently clamped away. Read the [module
+    /// documentation](self) before treating this as a billing basis.
     #[must_use]
-    pub fn energy_wh(&self) -> Option<f64> {
-        match (self.meter_start_wh, self.meter_stop_wh) {
-            (Some(start), Some(stop)) => Some(stop - start),
-            _ => None,
-        }
+    pub fn energy_wh(&self) -> Option<Decimal> {
+        self.meter_stop_wh?.checked_sub(self.meter_start_wh?)
     }
 }
 
@@ -205,14 +300,18 @@ impl Ledger {
         let record = self.records.entry(key).or_insert_with(|| Record {
             identity: event.identity.clone(),
             transaction_id: event.transaction_id.clone(),
+            evse_id: None,
+            connector_id: None,
             started_at: None,
             ended_at: None,
             id_token: None,
             stopped_reason: None,
             meter_start_wh: None,
             meter_stop_wh: None,
+            signed: Vec::new(),
             had_offline_events: false,
             seen: BTreeSet::new(),
+            unsequenced: BTreeSet::new(),
             highest: -1,
         });
 
@@ -224,6 +323,18 @@ impl Ledger {
         record.seen.insert(event.seq_no);
         record.highest = record.highest.max(event.seq_no);
         record.had_offline_events |= event.offline;
+        // First one seen wins: a transaction happens at one point, and not every message
+        // names it.
+        if record.evse_id.is_none() {
+            record.evse_id = event.evse_id;
+        }
+        if record.connector_id.is_none() {
+            record.connector_id = event.connector_id;
+        }
+        // Kept whatever the event's kind and whenever it arrives: a signed record is the
+        // billable value and there is no version of "too late" that makes it not one. The
+        // duplicate check above is what stops a retry appending it twice.
+        record.signed.extend(event.signed.iter().cloned());
         if let Some(token) = &event.id_token {
             record.id_token.get_or_insert_with(|| token.clone());
         }
@@ -269,24 +380,30 @@ impl Ledger {
     /// number for the transaction.
     ///
     /// Deduplication then falls back to `(station, transaction, kind, timestamp)`, which is
-    /// what 1.6 gives us to work with.
+    /// what 1.6 gives us to work with. It applies to a `MeterValues` retry exactly as it does
+    /// to a re-sent `StartTransaction`: 1.6 messages carry no identity of their own, so two
+    /// readings of the same kind bearing the same instant are one reading sent twice. A
+    /// station that genuinely samples twice within the same second reports the same second,
+    /// and a ledger that counted both would count a retry too.
     pub fn ingest_unsequenced(&mut self, event: &TransactionEvent) -> Ingested {
         let key = (event.identity.clone(), event.transaction_id.clone());
-        if let Some(record) = self.records.get(&key) {
-            let duplicate = match event.kind {
-                EventKind::Started => record.started_at == Some(event.timestamp),
-                EventKind::Ended => record.ended_at == Some(event.timestamp),
-                EventKind::Updated => false,
-            };
-            if duplicate {
-                return Ingested::Duplicate;
-            }
+        let mark = (event.kind, event.timestamp);
+        if self
+            .records
+            .get(&key)
+            .is_some_and(|record| record.unsequenced.contains(&mark))
+        {
+            return Ingested::Duplicate;
         }
-        let seq = self.next_seq.entry(key).or_insert(0);
+        let seq = self.next_seq.entry(key.clone()).or_insert(0);
         let mut event = event.clone();
         event.seq_no = *seq;
         *seq += 1;
-        self.ingest(&event)
+        let outcome = self.ingest(&event);
+        if let Some(record) = self.records.get_mut(&key) {
+            record.unsequenced.insert(mark);
+        }
+        outcome
     }
 
     /// Looks a transaction up.
@@ -334,6 +451,7 @@ impl Ledger {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::decimal;
 
     fn station() -> Identity {
         Identity::new("CS-0001").unwrap()
@@ -392,17 +510,21 @@ mod tests {
         let mut ledger = Ledger::new();
         ledger.ingest(
             &event(0, EventKind::Started)
-                .with_meter(1000.0)
+                .with_meter(decimal!(1000.0))
                 .with_id_token("CARD-1"),
         );
-        ledger.ingest(&event(1, EventKind::Updated).with_meter(4500.0).offline());
-        let mut ended = event(2, EventKind::Ended).with_meter(7300.0);
+        ledger.ingest(
+            &event(1, EventKind::Updated)
+                .with_meter(decimal!(4500.0))
+                .offline(),
+        );
+        let mut ended = event(2, EventKind::Ended).with_meter(decimal!(7300.0));
         ended.stopped_reason = Some("EVDisconnected".into());
         ledger.ingest(&ended);
 
         let record = ledger.transaction(&station(), "tx-1").unwrap();
         assert!(!record.is_open());
-        assert_eq!(record.energy_wh(), Some(6300.0));
+        assert_eq!(record.energy_wh(), Some(decimal!(6300)));
         assert_eq!(record.id_token.as_deref(), Some("CARD-1"));
         assert_eq!(record.stopped_reason.as_deref(), Some("EVDisconnected"));
         assert!(record.had_offline_events);
@@ -424,21 +546,21 @@ mod tests {
     #[test]
     fn ocpp_16_transactions_are_sequenced_by_the_ledger() {
         let mut ledger = Ledger::new();
-        let start =
-            TransactionEvent::new(station(), "42", 0, EventKind::Started, at(0)).with_meter(100.0);
+        let start = TransactionEvent::new(station(), "42", 0, EventKind::Started, at(0))
+            .with_meter(decimal!(100.0));
         assert_eq!(ledger.ingest_unsequenced(&start), Ingested::Applied);
         // 1.6 has no seqNo, so a re-sent StartTransaction is caught by its timestamp.
         assert_eq!(ledger.ingest_unsequenced(&start), Ingested::Duplicate);
 
         let meter = TransactionEvent::new(station(), "42", 0, EventKind::Updated, at(60))
-            .with_meter(2100.0);
+            .with_meter(decimal!(2100.0));
         assert_eq!(ledger.ingest_unsequenced(&meter), Ingested::Applied);
-        let stop =
-            TransactionEvent::new(station(), "42", 0, EventKind::Ended, at(120)).with_meter(3400.0);
+        let stop = TransactionEvent::new(station(), "42", 0, EventKind::Ended, at(120))
+            .with_meter(decimal!(3400.0));
         assert_eq!(ledger.ingest_unsequenced(&stop), Ingested::Applied);
 
         let record = ledger.transaction(&station(), "42").unwrap();
-        assert_eq!(record.energy_wh(), Some(3300.0));
+        assert_eq!(record.energy_wh(), Some(decimal!(3300)));
         assert!(record.missing().is_empty());
     }
 
@@ -454,26 +576,54 @@ mod tests {
         // The periodic meter value overtakes the transaction's own start.
         ledger.ingest(
             &TransactionEvent::new(station(), "tx-1", 1, EventKind::Updated, at(60))
-                .with_meter(2100.0),
+                .with_meter(decimal!(2100.0)),
         );
         ledger.ingest(
             &TransactionEvent::new(station(), "tx-1", 0, EventKind::Started, at(0))
-                .with_meter(1000.0),
+                .with_meter(decimal!(1000.0)),
         );
         ledger.ingest(
             &TransactionEvent::new(station(), "tx-1", 2, EventKind::Ended, at(120))
-                .with_meter(3400.0),
+                .with_meter(decimal!(3400.0)),
         );
         // And one more straggler lands after the transaction has already ended.
         ledger.ingest(
             &TransactionEvent::new(station(), "tx-1", 3, EventKind::Updated, at(90))
-                .with_meter(2800.0),
+                .with_meter(decimal!(2800.0)),
         );
 
         let record = ledger.transaction(&station(), "tx-1").unwrap();
-        assert_eq!(record.meter_start_wh, Some(1000.0));
-        assert_eq!(record.meter_stop_wh, Some(3400.0));
-        assert_eq!(record.energy_wh(), Some(2400.0));
+        assert_eq!(record.meter_start_wh, Some(decimal!(1000)));
+        assert_eq!(record.meter_stop_wh, Some(decimal!(3400)));
+        assert_eq!(record.energy_wh(), Some(decimal!(2400)));
+    }
+
+    /// 1.6 messages carry no identity of their own, so a retried `MeterValues` is recognised
+    /// only by its kind and its instant. Counting it twice appends the same signed record
+    /// twice — which is the one thing this ledger exists to stop.
+    #[test]
+    fn a_retried_16_meter_values_is_recognised_like_any_other_retry() {
+        let mut ledger = Ledger::new();
+        let start = TransactionEvent::new(station(), "42", 0, EventKind::Started, at(0));
+        assert_eq!(ledger.ingest_unsequenced(&start), Ingested::Applied);
+
+        let periodic = TransactionEvent::new(station(), "42", 0, EventKind::Updated, at(60))
+            .with_meter(decimal!(2100));
+        assert_eq!(ledger.ingest_unsequenced(&periodic), Ingested::Applied);
+        assert_eq!(ledger.ingest_unsequenced(&periodic), Ingested::Duplicate);
+
+        // A later reading is a different instant and goes in.
+        let later = TransactionEvent::new(station(), "42", 0, EventKind::Updated, at(120))
+            .with_meter(decimal!(2600));
+        assert_eq!(ledger.ingest_unsequenced(&later), Ingested::Applied);
+
+        let record = ledger.transaction(&station(), "42").unwrap();
+        assert_eq!(
+            record.events(),
+            3,
+            "the retry did not become a fourth event"
+        );
+        assert!(record.missing().is_empty());
     }
 
     #[test]

@@ -89,7 +89,7 @@ let csms = Csms::builder()
     .versions([Version::V2_1, Version::V2_0_1, Version::V1_6])
     .authenticate(|auth: Auth| async move {
         match lookup(&auth) {
-            Some(true) => AuthOutcome::Accept,
+            Some(true) => AuthOutcome::accept(),
             Some(false) => AuthOutcome::Reject,   // HTTP 401
             None => AuthOutcome::Unknown,         // HTTP 404
         }

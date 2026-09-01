@@ -109,3 +109,31 @@ pub struct VersionModel {
     pub structs: BTreeMap<String, StructDef>,
     pub messages: Vec<MessageDef>,
 }
+
+/// A schema bound as an exact `(mantissa, scale)` pair.
+///
+/// The bounds in the OCA schemas are written as JSON numbers (`"maximum": 100.0`) and read
+/// back as `f64`, but every one of them is a small whole or one-place decimal. Rendering the
+/// shortest text that round-trips and splitting it at the point recovers the exact value the
+/// schema wrote, which is what the generated `Decimal` comparison needs.
+///
+/// # Panics
+///
+/// If a schema ever grows a bound that is not finite, or needs more than 18 decimals.
+pub fn decimal_literal(value: f64) -> (i64, u8) {
+    assert!(value.is_finite(), "schema bound {value} is not finite");
+    let text = format!("{value}");
+    let (integer, fraction) = match text.split_once('.') {
+        Some((integer, fraction)) => (integer, fraction.trim_end_matches('0')),
+        None => (text.as_str(), ""),
+    };
+    assert!(
+        fraction.len() <= 18,
+        "schema bound {value} needs more decimals than a Decimal carries"
+    );
+    let digits = format!("{integer}{fraction}");
+    let mantissa: i64 = digits
+        .parse()
+        .unwrap_or_else(|_| panic!("schema bound {value} does not fit an i64 mantissa"));
+    (mantissa, u8::try_from(fraction.len()).unwrap())
+}

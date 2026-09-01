@@ -33,7 +33,16 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::types::DateTime;
+use crate::types::{DateTime, Decimal};
+
+/// The scale a limit converted between amperes and watts is rounded to.
+///
+/// Amperes and watts convert by multiplying or dividing by `voltage × phases`, and division
+/// is the one operation with no exact answer in base ten — 1000 W over 230 V and three phases
+/// is 1.449275… A. Three decimals is a milliampere, which is four orders of magnitude finer
+/// than any charging station resolves, and rounding there is what keeps the calculation
+/// exact everywhere else.
+pub const CONVERSION_SCALE: u8 = 3;
 
 /// The unit a limit is expressed in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -107,7 +116,7 @@ pub struct Period {
     /// Seconds after the schedule's start at which this step begins.
     pub start_period: i64,
     /// The limit, in the schedule's `RateUnit`.
-    pub limit: f64,
+    pub limit: Decimal,
     /// How many phases may be used.
     pub number_phases: Option<i32>,
     /// Which phase to use when only one is allowed.
@@ -117,7 +126,7 @@ pub struct Period {
 impl Period {
     /// A step with no phase constraints.
     #[must_use]
-    pub const fn new(start_period: i64, limit: f64) -> Self {
+    pub const fn new(start_period: i64, limit: Decimal) -> Self {
         Self {
             start_period,
             limit,
@@ -149,7 +158,7 @@ pub struct Schedule {
     /// The steps, which must be ordered by `start_period`.
     pub periods: Vec<Period>,
     /// The lowest rate the EV can usefully take.
-    pub min_charging_rate: Option<f64>,
+    pub min_charging_rate: Option<Decimal>,
 }
 
 impl Schedule {
@@ -308,7 +317,7 @@ impl Profile {
         &self,
         at: i64,
         transaction_start: Option<i64>,
-    ) -> Option<(f64, RateUnit, Option<i32>)> {
+    ) -> Option<(Decimal, RateUnit, Option<i32>)> {
         if !self.valid_at(at) {
             return None;
         }
@@ -320,10 +329,10 @@ impl Profile {
 }
 
 /// The supply parameters needed to convert between amperes and watts.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Supply {
     /// Nominal line voltage, in volts.
-    pub voltage: f64,
+    pub voltage: Decimal,
     /// The number of phases available.
     pub phases: i32,
 }
@@ -332,25 +341,39 @@ impl Default for Supply {
     /// 230 V, three phases — the European default.
     fn default() -> Self {
         Self {
-            voltage: 230.0,
+            voltage: Decimal::from(230),
             phases: 3,
         }
     }
 }
 
 impl Supply {
-    /// Converts a limit into `to`, or returns `None` when it cannot.
+    /// Converts a limit into `to`.
+    ///
+    /// Amperes to watts is exact. Watts to amperes is a division, so it is rounded to
+    /// [`CONVERSION_SCALE`] — a milliampere — half to even.
+    ///
+    /// `None` means the conversion has no representable answer: a zero voltage or phase
+    /// count, or a limit so large that `limit × voltage × phases` needs more than 19 digits.
+    /// Neither happens for a real supply, and a caller that hits one is better off seeing it
+    /// than being handed a number that is wrong.
     #[must_use]
-    pub fn convert(self, limit: f64, from: RateUnit, to: RateUnit, phases: Option<i32>) -> f64 {
+    pub fn convert(
+        self,
+        limit: Decimal,
+        from: RateUnit,
+        to: RateUnit,
+        phases: Option<i32>,
+    ) -> Option<Decimal> {
         if from == to {
-            return limit;
+            return Some(limit);
         }
-        #[allow(clippy::cast_precision_loss)]
-        let phases = f64::from(phases.unwrap_or(self.phases).max(1));
+        let phases = Decimal::from(phases.unwrap_or(self.phases).max(1));
+        let factor = self.voltage.checked_mul(phases)?;
         match (from, to) {
-            (RateUnit::A, RateUnit::W) => limit * self.voltage * phases,
-            (RateUnit::W, RateUnit::A) => limit / (self.voltage * phases),
-            _ => limit,
+            (RateUnit::A, RateUnit::W) => limit.checked_mul(factor),
+            (RateUnit::W, RateUnit::A) => limit.checked_div(factor, CONVERSION_SCALE),
+            _ => Some(limit),
         }
     }
 }
@@ -368,7 +391,7 @@ pub struct CompositePeriod {
     /// draw its rated maximum. `ChargingSchedulePeriodType.limit` is mandatory in the
     /// schemas, so a caller answering `GetCompositeSchedule` substitutes the EVSE's rated
     /// maximum here; see [`CompositeSchedule::fill_gaps`].
-    pub limit: Option<f64>,
+    pub limit: Option<Decimal>,
     /// The phase count the winning profile asked for.
     pub number_phases: Option<i32>,
 }
@@ -397,7 +420,8 @@ impl CompositeSchedule {
     /// is what the EVSE can actually deliver, which the protocol never tells the station —
     /// hence a parameter rather than a guess.
     #[must_use]
-    pub fn fill_gaps(mut self, rated_maximum: f64) -> Self {
+    pub fn fill_gaps(mut self, rated_maximum: impl Into<Decimal>) -> Self {
+        let rated_maximum = rated_maximum.into();
         for period in &mut self.periods {
             if period.limit.is_none() {
                 period.limit = Some(rated_maximum);
@@ -609,14 +633,14 @@ impl ProfileStore {
         at: i64,
         rate_unit: RateUnit,
         transaction_start: Option<i64>,
-    ) -> Option<(f64, Option<i32>)> {
+    ) -> Option<(Decimal, Option<i32>)> {
         // §3.6: "the leading charging schedule for that purpose is the charging schedule that
         // **has a schedule period defined for that time** and that belongs to a charging
         // profile with the highest stack level **that is valid at that time**". Both
         // qualifications are part of the selection, so a higher stack level that says nothing
         // about this instant does not shadow a lower one that does — it simply is not
         // leading here.
-        let leading = |purpose: Purpose| -> Option<(f64, Option<i32>)> {
+        let leading = |purpose: Purpose| -> Option<(Decimal, Option<i32>)> {
             profiles
                 .iter()
                 .filter(|profile| profile.purpose == purpose)
@@ -626,8 +650,10 @@ impl ProfileStore {
                         .map(|limit| (profile.stack_level, limit))
                 })
                 .max_by_key(|(stack_level, _)| *stack_level)
-                .map(|(_, (limit, unit, phases))| {
-                    (self.supply.convert(limit, unit, rate_unit, phases), phases)
+                .and_then(|(_, (limit, unit, phases))| {
+                    // A limit with no representable value in the requested unit constrains
+                    // nothing it can be trusted to constrain; see `Supply::convert`.
+                    Some((self.supply.convert(limit, unit, rate_unit, phases)?, phases))
                 })
         };
 
@@ -661,10 +687,15 @@ impl ProfileStore {
         // schedule." It is generation, not a constraint — taking the minimum with it would
         // turn a solar array into a limit.
         if let Some((generation, phases)) = leading(Purpose::LocalGeneration) {
-            effective = Some(match effective {
-                Some((current, current_phases)) => (current + generation, current_phases),
-                None => (generation, phases),
-            });
+            effective = match effective {
+                // The sum overflows only past 19 digits, at which point the honest answer is
+                // the constraint that was already there rather than a wrapped one.
+                Some((current, current_phases)) => Some((
+                    current.checked_add(generation).unwrap_or(current),
+                    current_phases,
+                )),
+                None => Some((generation, phases)),
+            };
         }
 
         effective
@@ -672,13 +703,11 @@ impl ProfileStore {
 }
 
 /// Whether two consecutive steps say the same thing, and so merge into one.
+///
+/// The limits are exact decimals, so this is an exact comparison — not the epsilon that a
+/// float would need, and that is wrong at both ends of the range it has to cover.
 fn same_step(previous: CompositePeriod, next: CompositePeriod) -> bool {
-    let same_limit = match (previous.limit, next.limit) {
-        (Some(a), Some(b)) => (a - b).abs() < f64::EPSILON,
-        (None, None) => true,
-        _ => false,
-    };
-    same_limit && previous.number_phases == next.number_phases
+    previous.limit == next.limit && previous.number_phases == next.number_phases
 }
 
 /// Seconds since the Unix epoch.
@@ -687,17 +716,15 @@ fn epoch(at: DateTime) -> i64 {
 }
 
 #[cfg(test)]
-// The limits under test travel through the calculation unchanged, so exact comparison is
-// both correct and the point.
-#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::decimal;
 
     fn at(text: &str) -> DateTime {
         DateTime::parse(text).unwrap()
     }
 
-    fn schedule(rate_unit: RateUnit, steps: &[(i64, f64)]) -> Schedule {
+    fn schedule(rate_unit: RateUnit, steps: &[(i64, Decimal)]) -> Schedule {
         Schedule::new(
             1,
             rate_unit,
@@ -716,7 +743,8 @@ mod tests {
             0,
             Purpose::TxDefaultProfile,
             ProfileKind::Absolute,
-            schedule(RateUnit::A, &[(0, 16.0), (3600, 10.0)]).starting(at("2024-01-01T00:00:00Z")),
+            schedule(RateUnit::A, &[(0, decimal!(16.0)), (3600, decimal!(10.0))])
+                .starting(at("2024-01-01T00:00:00Z")),
         ));
 
         let composite = store.composite(1, at("2024-01-01T00:00:00Z"), 7200, RateUnit::A, None);
@@ -725,12 +753,12 @@ mod tests {
             alloc::vec![
                 CompositePeriod {
                     start_period: 0,
-                    limit: Some(16.0),
+                    limit: Some(decimal!(16.0)),
                     number_phases: None
                 },
                 CompositePeriod {
                     start_period: 3600,
-                    limit: Some(10.0),
+                    limit: Some(decimal!(10.0)),
                     number_phases: None
                 },
             ]
@@ -745,18 +773,18 @@ mod tests {
             0,
             Purpose::TxDefaultProfile,
             ProfileKind::Absolute,
-            schedule(RateUnit::A, &[(0, 32.0)]).starting(at("2024-01-01T00:00:00Z")),
+            schedule(RateUnit::A, &[(0, decimal!(32.0))]).starting(at("2024-01-01T00:00:00Z")),
         ));
         store.install(Profile::new(
             2,
             5,
             Purpose::TxDefaultProfile,
             ProfileKind::Absolute,
-            schedule(RateUnit::A, &[(0, 6.0)]).starting(at("2024-01-01T00:00:00Z")),
+            schedule(RateUnit::A, &[(0, decimal!(6.0))]).starting(at("2024-01-01T00:00:00Z")),
         ));
 
         let composite = store.composite(1, at("2024-01-01T00:00:00Z"), 60, RateUnit::A, None);
-        assert_eq!(composite.periods[0].limit, Some(6.0));
+        assert_eq!(composite.periods[0].limit, Some(decimal!(6.0)));
     }
 
     #[test]
@@ -767,21 +795,22 @@ mod tests {
             0,
             Purpose::TxDefaultProfile,
             ProfileKind::Absolute,
-            schedule(RateUnit::A, &[(0, 32.0)]).starting(at("2024-01-01T00:00:00Z")),
+            schedule(RateUnit::A, &[(0, decimal!(32.0))]).starting(at("2024-01-01T00:00:00Z")),
         ));
         store.install(Profile::new(
             2,
             0,
             Purpose::ChargingStationMaxProfile,
             ProfileKind::Absolute,
-            schedule(RateUnit::A, &[(0, 20.0), (1800, 40.0)]).starting(at("2024-01-01T00:00:00Z")),
+            schedule(RateUnit::A, &[(0, decimal!(20.0)), (1800, decimal!(40.0))])
+                .starting(at("2024-01-01T00:00:00Z")),
         ));
 
         let composite = store.composite(1, at("2024-01-01T00:00:00Z"), 3600, RateUnit::A, None);
         // First the ceiling binds, then the session profile does.
-        assert_eq!(composite.periods[0].limit, Some(20.0));
+        assert_eq!(composite.periods[0].limit, Some(decimal!(20.0)));
         assert_eq!(composite.periods[1].start_period, 1800);
-        assert_eq!(composite.periods[1].limit, Some(32.0));
+        assert_eq!(composite.periods[1].limit, Some(decimal!(32.0)));
     }
 
     /// §3.6: the leading schedule is the highest stack level "**that is valid at that
@@ -798,7 +827,7 @@ mod tests {
             0,
             Purpose::TxDefaultProfile,
             ProfileKind::Absolute,
-            schedule(RateUnit::A, &[(0, 32.0)]).starting(at("2024-01-01T00:00:00Z")),
+            schedule(RateUnit::A, &[(0, decimal!(32.0))]).starting(at("2024-01-01T00:00:00Z")),
         ));
         // The exception: higher stack level, but only in effect for one hour.
         store.install(
@@ -807,7 +836,7 @@ mod tests {
                 5,
                 Purpose::TxDefaultProfile,
                 ProfileKind::Absolute,
-                schedule(RateUnit::A, &[(0, 6.0)]).starting(at("2024-01-01T00:00:00Z")),
+                schedule(RateUnit::A, &[(0, decimal!(6.0))]).starting(at("2024-01-01T00:00:00Z")),
             )
             .valid(None, Some(at("2024-01-01T01:00:00Z"))),
         );
@@ -815,12 +844,12 @@ mod tests {
         let composite = store.composite(1, at("2024-01-01T00:00:00Z"), 7200, RateUnit::A, None);
         assert_eq!(
             composite.periods[0].limit,
-            Some(6.0),
+            Some(decimal!(6.0)),
             "inside the exception's window it leads"
         );
         assert_eq!(
             composite.periods.last().and_then(|period| period.limit),
-            Some(32.0),
+            Some(decimal!(32.0)),
             "outside it, the weekly default leads again: {:?}",
             composite.periods
         );
@@ -838,18 +867,18 @@ mod tests {
             0,
             Purpose::TxDefaultProfile,
             ProfileKind::Absolute,
-            schedule(RateUnit::W, &[(0, 11_000.0)]).starting(at("2024-01-01T00:00:00Z")),
+            schedule(RateUnit::W, &[(0, decimal!(11_000.0))]).starting(at("2024-01-01T00:00:00Z")),
         ));
         store.install(Profile::new(
             2,
             0,
             Purpose::LocalGeneration,
             ProfileKind::Absolute,
-            schedule(RateUnit::W, &[(0, 4_000.0)]).starting(at("2024-01-01T00:00:00Z")),
+            schedule(RateUnit::W, &[(0, decimal!(4_000.0))]).starting(at("2024-01-01T00:00:00Z")),
         ));
 
         let composite = store.composite(1, at("2024-01-01T00:00:00Z"), 60, RateUnit::W, None);
-        assert_eq!(composite.periods[0].limit, Some(15_000.0));
+        assert_eq!(composite.periods[0].limit, Some(decimal!(15_000.0)));
     }
 
     #[test]
@@ -860,7 +889,7 @@ mod tests {
             9,
             Purpose::TxDefaultProfile,
             ProfileKind::Absolute,
-            schedule(RateUnit::A, &[(0, 6.0)]).starting(at("2024-01-01T00:00:00Z")),
+            schedule(RateUnit::A, &[(0, decimal!(6.0))]).starting(at("2024-01-01T00:00:00Z")),
         ));
         store.install(
             Profile::new(
@@ -868,14 +897,14 @@ mod tests {
                 0,
                 Purpose::TxProfile,
                 ProfileKind::Absolute,
-                schedule(RateUnit::A, &[(0, 32.0)]).starting(at("2024-01-01T00:00:00Z")),
+                schedule(RateUnit::A, &[(0, decimal!(32.0))]).starting(at("2024-01-01T00:00:00Z")),
             )
             .for_transaction("tx-1"),
         );
 
         // Without the transaction, the TxProfile does not apply at all.
         let without = store.composite(1, at("2024-01-01T00:00:00Z"), 60, RateUnit::A, None);
-        assert_eq!(without.periods[0].limit, Some(6.0));
+        assert_eq!(without.periods[0].limit, Some(decimal!(6.0)));
 
         // With it, it replaces the default even though its stack level is lower.
         let with = store.composite(
@@ -885,7 +914,7 @@ mod tests {
             RateUnit::A,
             Some(("tx-1", at("2024-01-01T00:00:00Z"))),
         );
-        assert_eq!(with.periods[0].limit, Some(32.0));
+        assert_eq!(with.periods[0].limit, Some(decimal!(32.0)));
     }
 
     #[test]
@@ -897,18 +926,23 @@ mod tests {
                 0,
                 Purpose::TxDefaultProfile,
                 ProfileKind::Recurring,
-                schedule(RateUnit::A, &[(0, 6.0), (43_200, 32.0)])
+                schedule(RateUnit::A, &[(0, decimal!(6.0)), (43_200, decimal!(32.0))])
                     .starting(at("2024-01-01T00:00:00Z")),
             )
             .recurring(Recurrency::Daily),
         );
 
         let composite = store.composite(1, at("2024-01-03T00:00:00Z"), 172_800, RateUnit::A, None);
-        let limits: Vec<Option<f64>> = composite.periods.iter().map(|p| p.limit).collect();
+        let limits: Vec<Option<Decimal>> = composite.periods.iter().map(|p| p.limit).collect();
         // Cheap overnight, expensive by day, twice over two days.
         assert_eq!(
             limits,
-            alloc::vec![Some(6.0), Some(32.0), Some(6.0), Some(32.0)]
+            alloc::vec![
+                Some(decimal!(6.0)),
+                Some(decimal!(32.0)),
+                Some(decimal!(6.0)),
+                Some(decimal!(32.0))
+            ]
         );
         assert_eq!(composite.periods[1].start_period, 43_200);
         assert_eq!(composite.periods[2].start_period, 86_400);
@@ -923,7 +957,7 @@ mod tests {
                 0,
                 Purpose::TxDefaultProfile,
                 ProfileKind::Absolute,
-                schedule(RateUnit::A, &[(0, 16.0)]).starting(at("2024-01-01T00:00:00Z")),
+                schedule(RateUnit::A, &[(0, decimal!(16.0))]).starting(at("2024-01-01T00:00:00Z")),
             )
             .valid(None, Some(at("2024-01-01T01:00:00Z"))),
         );
@@ -932,15 +966,15 @@ mod tests {
         // point: after `validTo` nothing constrains the EVSE, and carrying 16 A through the
         // rest of the window would report a limit that no installed profile imposes.
         assert_eq!(composite.periods.len(), 2, "{:?}", composite.periods);
-        assert_eq!(composite.periods[0].limit, Some(16.0));
+        assert_eq!(composite.periods[0].limit, Some(decimal!(16.0)));
         assert_eq!(composite.periods[1].start_period, 3600);
         assert_eq!(composite.periods[1].limit, None);
         assert!(composite.has_gaps());
 
         // `GetCompositeSchedule` has to name a number, so the caller supplies the EVSE's
         // rated maximum for the stretch nothing constrains.
-        let filled = composite.fill_gaps(32.0);
-        assert_eq!(filled.periods[1].limit, Some(32.0));
+        let filled = composite.fill_gaps(decimal!(32.0));
+        assert_eq!(filled.periods[1].limit, Some(decimal!(32.0)));
         assert!(!filled.has_gaps());
     }
 
@@ -948,7 +982,7 @@ mod tests {
     fn limits_convert_between_amperes_and_watts() {
         let mut store = ProfileStore::new();
         store.supply = Supply {
-            voltage: 230.0,
+            voltage: decimal!(230.0),
             phases: 3,
         };
         store.install(Profile::new(
@@ -956,10 +990,12 @@ mod tests {
             0,
             Purpose::TxDefaultProfile,
             ProfileKind::Absolute,
-            schedule(RateUnit::A, &[(0, 16.0)]).starting(at("2024-01-01T00:00:00Z")),
+            schedule(RateUnit::A, &[(0, decimal!(16.0))]).starting(at("2024-01-01T00:00:00Z")),
         ));
         let composite = store.composite(1, at("2024-01-01T00:00:00Z"), 60, RateUnit::W, None);
-        assert!((composite.periods[0].limit.unwrap() - 16.0 * 230.0 * 3.0).abs() < 1e-6);
+        // Exactly 11040 W, not 11039.999999999998: the conversion is a decimal
+        // multiplication, so there is nothing to compare with a tolerance.
+        assert_eq!(composite.periods[0].limit, Some(decimal!(11040)));
     }
 
     #[test]
@@ -972,7 +1008,8 @@ mod tests {
                     id,
                     Purpose::TxDefaultProfile,
                     ProfileKind::Absolute,
-                    schedule(RateUnit::A, &[(0, 16.0)]).starting(at("2024-01-01T00:00:00Z")),
+                    schedule(RateUnit::A, &[(0, decimal!(16.0))])
+                        .starting(at("2024-01-01T00:00:00Z")),
                 )
                 .on_evse(u32::try_from(id).unwrap()),
             );
@@ -995,7 +1032,7 @@ mod tests {
                 0,
                 Purpose::TxProfile,
                 ProfileKind::Absolute,
-                schedule(RateUnit::A, &[(0, 32.0)]).starting(at("2024-01-01T00:00:00Z")),
+                schedule(RateUnit::A, &[(0, decimal!(32.0))]).starting(at("2024-01-01T00:00:00Z")),
             )
             .for_transaction("tx-1"),
         );

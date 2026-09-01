@@ -16,6 +16,7 @@ logic in your binary.
 | **L3** | [`transport`] | Tokio + `rustls`, with its own RFC 6455 WebSocket and RFC 7692 compression: [`Station`](transport::Station), [`Csms`](transport::Csms), [`LocalController`](transport::LocalController), security profiles 1–3, network failover | – |
 | **L4** | [`station`], [`csms`] | Opt-in building blocks: device model, 1.6 configuration keys, transaction rules, local authorization, composite schedules, an idempotent CSMS ledger, version-agnostic events | partial |
 | — | [`standard`] | The catalogues that live outside the schemas: security events with their criticality, 74 standardized components, 448 variables, reason codes | ✅ `alloc` |
+| — | [`metering`] | Signed meter values: the record a customer may be billed for, in every version's hiding place | ✅ `alloc` |
 
 ## Getting started
 
@@ -62,6 +63,29 @@ answering with the wrong one is a conformance failure. A missing member is an
 `TypeConstraintViolation`, an over-long string is a `PropertyConstraintViolation`, and a
 payload that is not an object at all is a `FormatViolation` — spelled `FormationViolation`
 when you are talking 1.6. See [`decode`] and [`rpc::ErrorCode`].
+
+**The value that pays for the electricity.** An OCPP meter value is telemetry; under German
+calibration law a customer may only be billed for the record the *meter* signed, which is not
+the protocol's own number and often not even the same quantity. [`metering`] is the protocol
+knowledge around it: 1.6 hides the whole 2.x `SignedMeterValueType` inside the `value` string
+of a `SignedData` sample, and the `publicKey` field is an envelope whose specification and
+whose own example message disagree. Both shapes are read, and every signed record reaches the
+[`csms::events`] funnel untouched.
+
+**Nothing that decides money fails silently.** A station that claims to send signed meter data
+and sends something unparseable is otherwise indistinguishable from one sending none, so every
+such drop raises an [`Observed::warnings`](csms::events::Observed) entry naming what arrived.
+The funnel also carries the `charging_state` and the EVSE a session is at — the facts a meter
+reading cannot supply and a CDR needs.
+
+**Numbers are exact, not `f64`.** Every OCPP `number` — a meter register, a charging limit, a
+2.1 tariff price — is a [`types::Decimal`](types::Decimal): a mantissa and a decimal scale. A
+meter reporting `2935.600` kWh is claiming three decimals of resolution, and it goes back out
+as `2935.600`; a session's energy, which OCPP *defines* as a difference of two registers, is
+that difference exactly rather than `10.000000000000002`. Literals are written
+[`decimal!(32.5)`](decimal), and the `f64` conversions are named `to_f64_lossy` /
+`from_f64_lossy` so a signature says what it costs. `cargo xtask no-floats` keeps them out of
+the public API, and CI runs it.
 
 **The protocol logic has no I/O.** [`engine::Engine`] is a pure state machine: you feed it
 [`Input`](engine::Input)s — each with the driver's current [`Instant`](engine::Instant) — and

@@ -3,8 +3,6 @@
 //! These are not tests *of* the testkit so much as proof that it is usable: if writing them
 //! is awkward here, it will be awkward everywhere.
 
-#![cfg(feature = "testkit")]
-
 use std::time::Duration;
 
 use ocpp_kit::Version;

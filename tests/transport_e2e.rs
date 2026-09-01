@@ -1,8 +1,6 @@
 //! End-to-end tests over real sockets: a Charging Station, a CSMS, and a Local Controller
 //! between them.
 
-#![cfg(feature = "tokio")]
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -12,8 +10,8 @@ use ocpp_kit::engine::IncomingRequest;
 use ocpp_kit::rpc::CallError;
 use ocpp_kit::transport::{
     Auth, AuthOutcome, BoxFuture, Csms, CsmsHandle, Ctx, Direction, Handle, Handler,
-    LocalController, NetworkProfile, NetworkProfiles, RelayDecision, SecurityProfile, SessionEvent,
-    Station,
+    LocalController, NetworkProfile, NetworkProfiles, RelayDecision, SecurityProfile,
+    SessionContext, SessionEvent, Station,
 };
 use ocpp_kit::types::Identity;
 use ocpp_kit::{Version, v2_1};
@@ -142,7 +140,7 @@ fn station_with(port: u16, identity: &str, reconnect: bool) -> Handle {
 }
 
 async fn accept_all(_auth: Auth) -> AuthOutcome {
-    AuthOutcome::Accept
+    AuthOutcome::accept()
 }
 
 #[tokio::test]
@@ -191,7 +189,7 @@ async fn bad_credentials_get_a_401_and_an_unknown_identity_a_404() {
     let handler = Arc::new(CsmsSide::new(v2_1::RegistrationStatus::Accepted));
     let (port, csms) = start_csms(handler, |auth: Auth| async move {
         match auth.identity.as_str() {
-            "CS-KNOWN" => AuthOutcome::Accept,
+            "CS-KNOWN" => AuthOutcome::accept(),
             "CS-WRONGPW" => AuthOutcome::Reject,
             _ => AuthOutcome::Unknown,
         }
@@ -658,7 +656,7 @@ async fn a_basic_username_that_is_not_the_url_identity_is_refused() {
     let (port, _csms) = start_csms(handler, |auth: Auth| async move {
         match &auth.credentials {
             ocpp_kit::transport::Credentials::Basic { user, .. } if user == "CS-ATTACKER" => {
-                AuthOutcome::Accept
+                AuthOutcome::accept()
             }
             _ => AuthOutcome::Reject,
         }
@@ -779,4 +777,102 @@ fn the_documented_security_profile_configurations_build() {
             .build()
             .is_err()
     );
+}
+
+/// A CSMS maps a connection's identity to something of its own, and the authenticator is the
+/// one place that has already had to do the lookup. What it resolves rides the session, so a
+/// handler does not keep a second map keyed on `Identity` — and does not have to decide what
+/// to do when that map misses for a station the authenticator definitely admitted.
+#[tokio::test]
+async fn what_the_authenticator_resolved_reaches_the_handler_and_the_handle() {
+    /// The application's own view of a charge point.
+    #[derive(Debug, PartialEq)]
+    struct ChargePoint {
+        row_id: u64,
+        tenant: String,
+    }
+
+    /// A handler that reports whether it could see the resolved charge point.
+    struct Resolving(Arc<AtomicUsize>);
+
+    impl Handler for Resolving {
+        fn on_request(
+            &self,
+            ctx: Ctx,
+            request: IncomingRequest,
+        ) -> BoxFuture<'_, Result<Box<RawValue>, CallError>> {
+            let seen = ctx.session::<ChargePoint>().is_some_and(|point| {
+                point.row_id == 42 && point.tenant == "acme" && ctx.identity().as_str() == "CS-0001"
+            });
+            Box::pin(async move {
+                if seen {
+                    self.0.fetch_add(1, Ordering::SeqCst);
+                }
+                let action = v2_1::Action::from_wire(&request.action)
+                    .ok_or_else(|| CallError::not_implemented(&request.action))?;
+                match v2_1::CsRequest::decode(action, &request.payload, ctx.decode_options())? {
+                    v2_1::CsRequest::BootNotification(_) => {
+                        ctx.reply(&v2_1::BootNotificationResponse::new(
+                            ocpp_kit::types::DateTime::now(),
+                            0,
+                            v2_1::RegistrationStatus::Accepted,
+                        ))
+                    }
+                    other => Err(CallError::not_supported(other.action().as_str())),
+                }
+            })
+        }
+    }
+
+    let resolved = Arc::new(AtomicUsize::new(0));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let csms = Csms::builder()
+        .bind(listener.local_addr().unwrap())
+        .versions([Version::V2_1])
+        .authenticate(|auth: Auth| async move {
+            // The lookup happens once, here, where the station has to be looked up anyway.
+            if auth.identity.as_str() == "CS-0001" {
+                AuthOutcome::Accept(SessionContext::new(ChargePoint {
+                    row_id: 42,
+                    tenant: "acme".into(),
+                }))
+            } else {
+                AuthOutcome::Unknown
+            }
+        })
+        .handler(Resolving(resolved.clone()))
+        .ping_interval(None)
+        .build()
+        .unwrap();
+    let csms_handle = csms.handle();
+    tokio::spawn(async move {
+        let _ = csms.serve_on(listener).await;
+    });
+
+    let station = station(port, "CS-0001");
+    station
+        .call(v2_1::BootNotificationRequest::new(
+            v2_1::ChargingStation::new("Model-1", "ACME"),
+            v2_1::BootReason::PowerUp,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resolved.load(Ordering::SeqCst), 1);
+
+    // And the CSMS-side handle carries it too, so code that calls *out* to a station sees the
+    // same resolution as code answering a call from one.
+    let identity = Identity::new("CS-0001").unwrap();
+    let to_station = csms_handle
+        .session(&identity)
+        .await
+        .expect("a connected station");
+    assert_eq!(
+        to_station
+            .session::<ChargePoint>()
+            .map(|point| point.row_id),
+        Some(42)
+    );
+    // A type that was never stored is `None`, not a panic.
+    assert!(to_station.session::<String>().is_none());
 }

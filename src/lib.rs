@@ -13,9 +13,11 @@ mod macros;
 pub mod actions;
 #[cfg(feature = "csms")]
 pub mod csms;
+mod decimal;
 pub mod decode;
 pub mod engine;
 pub mod message;
+pub mod metering;
 pub mod rpc;
 pub mod standard;
 #[cfg(feature = "station")]

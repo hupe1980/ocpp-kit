@@ -17,6 +17,10 @@
 )]
 #![allow(clippy::cast_possible_wrap, clippy::items_after_statements)]
 
+use std::path::{Path, PathBuf};
+
+use ocpp_kit::Version;
+
 use serde_json::{Map, Value, json};
 
 // ---------------------------------------------------------------------------
@@ -24,6 +28,27 @@ use serde_json::{Map, Value, json};
 // ---------------------------------------------------------------------------
 
 /// xorshift64*, so a failing case can always be reproduced from its seed.
+pub fn schemas_dir(version: Version) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("schemas")
+        .join(version.slug())
+}
+
+/// Locates the schema file for one action, honouring 1.6's unsuffixed request files and
+/// 2.1's response-less `NotifyPeriodicEventStream`.
+pub fn schema_path(version: Version, action: &str, response: bool) -> Option<PathBuf> {
+    let dir = schemas_dir(version);
+    let candidates = if response {
+        vec![format!("{action}Response.json")]
+    } else {
+        vec![format!("{action}Request.json"), format!("{action}.json")]
+    };
+    candidates
+        .into_iter()
+        .map(|name| dir.join(name))
+        .find(|path| path.exists())
+}
+
 pub struct Rng(u64);
 
 impl Rng {
@@ -123,11 +148,17 @@ impl<'a> Generator<'a> {
                     .get("maximum")
                     .and_then(Value::as_f64)
                     .unwrap_or(1000.0);
-                // Always fractional: an integral JSON number would compare unequal to the
-                // `f64` the Rust type serializes back.
+                // Both integral and fractional values are generated: `Decimal` carries the
+                // number the schema instance wrote, so `5` comes back as `5` rather than as
+                // `5.0` and there is no longer a spelling the round trip cannot survive.
                 let steps = self.rng.below(100) as f64 / 100.0;
                 let value = min + (max - min) * steps;
-                json!((value * 100.0).round() / 100.0 + 0.25)
+                let rounded = (value * 100.0).round() / 100.0;
+                if self.rng.chance(30) {
+                    json!(rounded.trunc() as i64)
+                } else {
+                    json!(rounded + 0.25)
+                }
             }
             Some("boolean") => json!(self.rng.chance(50)),
             // Only OCPP 2.x `DataTransfer.data` is untyped.

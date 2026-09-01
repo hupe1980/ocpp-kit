@@ -7,7 +7,6 @@
 //! schedule agrees with the stacking rules evaluated directly.
 
 // The properties cover the L4 blocks, so they only exist when those blocks do.
-#![cfg(all(feature = "station", feature = "csms"))]
 // Scenario sizes here are small integers by construction; the casts cannot lose anything.
 #![allow(
     clippy::cast_possible_truncation,
@@ -29,7 +28,7 @@ use ocpp_kit::engine::{
 use ocpp_kit::station::smart_charging::{
     Period, Profile, ProfileKind, ProfileStore, Purpose, RateUnit, Schedule,
 };
-use ocpp_kit::types::{DateTime, Identity};
+use ocpp_kit::types::{DateTime, Decimal, Identity};
 use ocpp_kit::{RawValue, Version};
 
 /// The engine takes the driver's clock on every entry point. A test that is not
@@ -321,7 +320,8 @@ fn the_ledger_reaches_the_same_state_whatever_order_events_arrive_in() {
                         jiff::Timestamp::from_second(1_700_000_000 + seq as i64).unwrap(),
                     ),
                 )
-                .with_meter(seq as f64 * 100.0)
+                // A register that a float would round: 0.001 Wh steps at three decimals.
+                .with_meter(Decimal::new(i64::try_from(seq).unwrap() * 100_001, 3))
             })
             .collect();
 
@@ -409,7 +409,7 @@ fn a_composite_schedule_agrees_with_the_stacking_rules_evaluated_directly() {
 
         // Profiles across the three purposes that behave differently: two that stack and
         // minimise, and one that is added on top.
-        let mut declared: Vec<(Purpose, i32, Option<i64>, Vec<(i64, f64)>)> = Vec::new();
+        let mut declared: Vec<(Purpose, i32, Option<i64>, Vec<(i64, Decimal)>)> = Vec::new();
         for id in 0..(1 + rng.below(5)) {
             let purpose = match rng.below(10) {
                 0..=4 => Purpose::TxDefaultProfile,
@@ -420,11 +420,12 @@ fn a_composite_schedule_agrees_with_the_stacking_rules_evaluated_directly() {
             // A schedule that may start part-way through the window, so a higher stack level
             // does not always have a period to contribute.
             let first_step = (rng.below(3) * 600) as i64;
-            let steps: Vec<(i64, f64)> = (0..(1 + rng.below(3)))
+            let steps: Vec<(i64, Decimal)> = (0..(1 + rng.below(3)))
                 .map(|step| {
                     (
                         first_step + (step * (600 + rng.below(600))) as i64,
-                        (1 + rng.below(60)) as f64,
+                        // Two decimals, so a limit that survived an f64 would show up.
+                        Decimal::new(i64::try_from(1 + rng.below(60)).unwrap() * 100 + 25, 2),
                     )
                 })
                 .collect();
@@ -464,7 +465,7 @@ fn a_composite_schedule_agrees_with_the_stacking_rules_evaluated_directly() {
         // with the highest stack level that is both valid at this instant and has a period
         // defined for it. Across purposes, the lowest limit — and LocalGeneration on top.
         for offset in (0..duration).step_by(37) {
-            let leading = |purpose: Purpose| -> Option<f64> {
+            let leading = |purpose: Purpose| -> Option<Decimal> {
                 declared
                     .iter()
                     .filter(|(p, _, _, _)| *p == purpose)
@@ -504,8 +505,10 @@ fn a_composite_schedule_agrees_with_the_stacking_rules_evaluated_directly() {
                 .and_then(|period| period.limit);
 
             match (expected, actual) {
-                (Some(expected), Some(actual)) => assert!(
-                    (expected - actual).abs() < 1e-9,
+                // Exact: the calculation only ever selects, minimises and adds, and all
+                // three are exact on decimals. A tolerance here would hide a real defect.
+                (Some(expected), Some(actual)) => assert_eq!(
+                    expected, actual,
                     "seed {seed} at +{offset}s: expected {expected}, got {actual}"
                 ),
                 (None, _) => {}
@@ -517,13 +520,8 @@ fn a_composite_schedule_agrees_with_the_stacking_rules_evaluated_directly() {
 
         // Merged: no two consecutive steps carry the same limit.
         for pair in composite.periods.windows(2) {
-            let same_limit = match (pair[0].limit, pair[1].limit) {
-                (Some(a), Some(b)) => (a - b).abs() <= f64::EPSILON,
-                (None, None) => true,
-                _ => false,
-            };
             assert!(
-                !same_limit || pair[0].number_phases != pair[1].number_phases,
+                pair[0].limit != pair[1].limit || pair[0].number_phases != pair[1].number_phases,
                 "seed {seed}: consecutive steps must differ"
             );
         }

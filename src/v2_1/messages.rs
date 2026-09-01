@@ -172,7 +172,7 @@ impl AdjustPeriodicEventStreamRequest {
 impl Validate for AdjustPeriodicEventStreamRequest {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("id");
-        validate::int_range(i64::from(self.id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.id), Some(0), None, path, out);
         path.pop();
         path.push_key("params");
         Validate::validate_at(&self.params, path, out);
@@ -739,7 +739,7 @@ impl CancelReservationRequest {
 impl Validate for CancelReservationRequest {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("reservationId");
-        validate::int_range(i64::from(self.reservation_id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.reservation_id), Some(0), None, path, out);
         path.pop();
         path.push_key("customData");
         if let Some(value) = &self.custom_data {
@@ -1649,7 +1649,7 @@ impl ClearDisplayMessageRequest {
 impl Validate for ClearDisplayMessageRequest {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("id");
-        validate::int_range(i64::from(self.id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.id), Some(0), None, path, out);
         path.pop();
         path.push_key("customData");
         if let Some(value) = &self.custom_data {
@@ -1792,7 +1792,7 @@ impl Validate for ClearTariffsRequest {
         path.pop();
         path.push_key("evseId");
         if let Some(value) = &self.evse_id {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("customData");
@@ -1900,7 +1900,7 @@ impl Validate for ClearVariableMonitoringRequest {
         validate::list_len(self.id.len(), Some(1), None, path, out);
         for (index, item) in self.id.iter().enumerate() {
             path.push_index(index);
-            validate::int_range(i64::from(*item), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*item), Some(0), None, path, out);
             path.pop();
         }
         path.pop();
@@ -2029,7 +2029,7 @@ impl Validate for ClearedChargingLimitRequest {
         path.pop();
         path.push_key("evseId");
         if let Some(value) = &self.evse_id {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("customData");
@@ -2120,7 +2120,7 @@ impl ClosePeriodicEventStreamRequest {
 impl Validate for ClosePeriodicEventStreamRequest {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("id");
-        validate::int_range(i64::from(self.id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.id), Some(0), None, path, out);
         path.pop();
         path.push_key("customData");
         if let Some(value) = &self.custom_data {
@@ -2352,7 +2352,7 @@ impl CustomerInformationRequest {
 impl Validate for CustomerInformationRequest {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("requestId");
-        validate::int_range(i64::from(self.request_id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.request_id), Some(0), None, path, out);
         path.pop();
         path.push_key("customerCertificate");
         if let Some(value) = &self.customer_certificate {
@@ -2931,7 +2931,7 @@ impl Validate for Get15118EVCertificateRequest {
         path.pop();
         path.push_key("maximumContractCertificateChains");
         if let Some(value) = &self.maximum_contract_certificate_chains {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("prioritizedEMAIDs");
@@ -3036,7 +3036,7 @@ impl Validate for Get15118EVCertificateResponse {
         path.pop();
         path.push_key("remainingContracts");
         if let Some(value) = &self.remaining_contracts {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("customData");
@@ -3474,7 +3474,7 @@ impl Validate for GetChargingProfilesRequest {
         path.pop();
         path.push_key("evseId");
         if let Some(value) = &self.evse_id {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("customData");
@@ -3606,7 +3606,7 @@ impl GetCompositeScheduleRequest {
 impl Validate for GetCompositeScheduleRequest {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("evseId");
-        validate::int_range(i64::from(self.evse_id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.evse_id), Some(0), None, path, out);
         path.pop();
         path.push_key("chargingRateUnit");
         if let Some(value) = &self.charging_rate_unit {
@@ -3939,7 +3939,7 @@ impl Validate for GetDisplayMessagesRequest {
             validate::list_len(value.len(), Some(1), None, path, out);
             for (index, item) in value.iter().enumerate() {
                 path.push_index(index);
-                validate::int_range(i64::from(*item), Some(0.0), None, path, out);
+                validate::int_range(i64::from(*item), Some(0), None, path, out);
                 path.pop();
             }
         }
@@ -4346,7 +4346,7 @@ impl Validate for GetLogRequest {
         path.pop();
         path.push_key("retries");
         if let Some(value) = &self.retries {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("customData");
@@ -4898,7 +4898,7 @@ impl GetTariffsRequest {
 impl Validate for GetTariffsRequest {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("evseId");
-        validate::int_range(i64::from(self.evse_id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.evse_id), Some(0), None, path, out);
         path.pop();
         path.push_key("customData");
         if let Some(value) = &self.custom_data {
@@ -5596,7 +5596,7 @@ impl MeterValuesRequest {
 impl Validate for MeterValuesRequest {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("evseId");
-        validate::int_range(i64::from(self.evse_id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.evse_id), Some(0), None, path, out);
         path.pop();
         path.push_key("meterValue");
         validate::list_len(self.meter_value.len(), Some(1), None, path, out);
@@ -5864,7 +5864,7 @@ impl Validate for NotifyChargingLimitRequest {
         path.pop();
         path.push_key("evseId");
         if let Some(value) = &self.evse_id {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("customData");
@@ -5987,10 +5987,10 @@ impl Validate for NotifyCustomerInformationRequest {
         validate::string(self.data.as_str(), None, Some(512), path, out);
         path.pop();
         path.push_key("seqNo");
-        validate::int_range(i64::from(self.seq_no), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.seq_no), Some(0), None, path, out);
         path.pop();
         path.push_key("requestId");
-        validate::int_range(i64::from(self.request_id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.request_id), Some(0), None, path, out);
         path.pop();
         path.push_key("customData");
         if let Some(value) = &self.custom_data {
@@ -6501,14 +6501,14 @@ impl NotifyEVChargingNeedsRequest {
 impl Validate for NotifyEVChargingNeedsRequest {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("evseId");
-        validate::int_range(i64::from(self.evse_id), Some(1.0), None, path, out);
+        validate::int_range(i64::from(self.evse_id), Some(1), None, path, out);
         path.pop();
         path.push_key("chargingNeeds");
         Validate::validate_at(&self.charging_needs, path, out);
         path.pop();
         path.push_key("maxScheduleTuples");
         if let Some(value) = &self.max_schedule_tuples {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("customData");
@@ -6665,11 +6665,11 @@ impl Validate for NotifyEVChargingScheduleRequest {
         Validate::validate_at(&self.charging_schedule, path, out);
         path.pop();
         path.push_key("evseId");
-        validate::int_range(i64::from(self.evse_id), Some(1.0), None, path, out);
+        validate::int_range(i64::from(self.evse_id), Some(1), None, path, out);
         path.pop();
         path.push_key("selectedChargingScheduleId");
         if let Some(value) = &self.selected_charging_schedule_id {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("customData");
@@ -6810,7 +6810,7 @@ impl NotifyEventRequest {
 impl Validate for NotifyEventRequest {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("seqNo");
-        validate::int_range(i64::from(self.seq_no), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.seq_no), Some(0), None, path, out);
         path.pop();
         path.push_key("eventData");
         validate::list_len(self.event_data.len(), Some(1), None, path, out);
@@ -6944,7 +6944,7 @@ impl NotifyMonitoringReportRequest {
 impl Validate for NotifyMonitoringReportRequest {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("seqNo");
-        validate::int_range(i64::from(self.seq_no), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.seq_no), Some(0), None, path, out);
         path.pop();
         path.push_key("monitor");
         if let Some(value) = &self.monitor {
@@ -7066,10 +7066,10 @@ impl Validate for NotifyPeriodicEventStreamRequest {
         }
         path.pop();
         path.push_key("id");
-        validate::int_range(i64::from(self.id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.id), Some(0), None, path, out);
         path.pop();
         path.push_key("pending");
-        validate::int_range(i64::from(self.pending), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.pending), Some(0), None, path, out);
         path.pop();
         path.push_key("customData");
         if let Some(value) = &self.custom_data {
@@ -7255,7 +7255,7 @@ impl NotifyReportRequest {
 impl Validate for NotifyReportRequest {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("seqNo");
-        validate::int_range(i64::from(self.seq_no), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.seq_no), Some(0), None, path, out);
         path.pop();
         path.push_key("reportData");
         if let Some(value) = &self.report_data {
@@ -7603,7 +7603,7 @@ impl NotifyWebPaymentStartedRequest {
 impl Validate for NotifyWebPaymentStartedRequest {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("evseId");
-        validate::int_range(i64::from(self.evse_id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.evse_id), Some(0), None, path, out);
         path.pop();
         path.push_key("customData");
         if let Some(value) = &self.custom_data {
@@ -7854,16 +7854,16 @@ impl Validate for PublishFirmwareRequest {
         validate::string(self.checksum.as_str(), None, Some(32), path, out);
         path.pop();
         path.push_key("requestId");
-        validate::int_range(i64::from(self.request_id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.request_id), Some(0), None, path, out);
         path.pop();
         path.push_key("retries");
         if let Some(value) = &self.retries {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("retryInterval");
         if let Some(value) = &self.retry_interval {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("customData");
@@ -8031,7 +8031,7 @@ impl Validate for PublishFirmwareStatusNotificationRequest {
         path.pop();
         path.push_key("requestId");
         if let Some(value) = &self.request_id {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("statusInfo");
@@ -8304,7 +8304,7 @@ impl Validate for ReportChargingProfilesRequest {
         }
         path.pop();
         path.push_key("evseId");
-        validate::int_range(i64::from(self.evse_id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.evse_id), Some(0), None, path, out);
         path.pop();
         path.push_key("customData");
         if let Some(value) = &self.custom_data {
@@ -8835,7 +8835,7 @@ impl Validate for RequestStartTransactionRequest {
         path.pop();
         path.push_key("evseId");
         if let Some(value) = &self.evse_id {
-            validate::int_range(i64::from(*value), Some(1.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(1), None, path, out);
         }
         path.pop();
         path.push_key("groupIdToken");
@@ -9099,7 +9099,7 @@ impl ReservationStatusUpdateRequest {
 impl Validate for ReservationStatusUpdateRequest {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("reservationId");
-        validate::int_range(i64::from(self.reservation_id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.reservation_id), Some(0), None, path, out);
         path.pop();
         path.push_key("reservationUpdateStatus");
         Validate::validate_at(&self.reservation_update_status, path, out);
@@ -9240,7 +9240,7 @@ impl ReserveNowRequest {
 impl Validate for ReserveNowRequest {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("id");
-        validate::int_range(i64::from(self.id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.id), Some(0), None, path, out);
         path.pop();
         path.push_key("idToken");
         Validate::validate_at(&self.id_token, path, out);
@@ -9252,7 +9252,7 @@ impl Validate for ReserveNowRequest {
         path.pop();
         path.push_key("evseId");
         if let Some(value) = &self.evse_id {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("groupIdToken");
@@ -9389,7 +9389,7 @@ impl Validate for ResetRequest {
         path.pop();
         path.push_key("evseId");
         if let Some(value) = &self.evse_id {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("customData");
@@ -9762,7 +9762,7 @@ impl SetChargingProfileRequest {
 impl Validate for SetChargingProfileRequest {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("evseId");
-        validate::int_range(i64::from(self.evse_id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.evse_id), Some(0), None, path, out);
         path.pop();
         path.push_key("chargingProfile");
         Validate::validate_at(&self.charging_profile, path, out);
@@ -10170,7 +10170,7 @@ impl SetDefaultTariffRequest {
 impl Validate for SetDefaultTariffRequest {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("evseId");
-        validate::int_range(i64::from(self.evse_id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.evse_id), Some(0), None, path, out);
         path.pop();
         path.push_key("tariff");
         Validate::validate_at(&self.tariff, path, out);
@@ -10542,7 +10542,7 @@ impl SetMonitoringLevelRequest {
 impl Validate for SetMonitoringLevelRequest {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("severity");
-        validate::int_range(i64::from(self.severity), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.severity), Some(0), None, path, out);
         path.pop();
         path.push_key("customData");
         if let Some(value) = &self.custom_data {
@@ -11178,10 +11178,10 @@ impl Validate for StatusNotificationRequest {
         Validate::validate_at(&self.connector_status, path, out);
         path.pop();
         path.push_key("evseId");
-        validate::int_range(i64::from(self.evse_id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.evse_id), Some(0), None, path, out);
         path.pop();
         path.push_key("connectorId");
-        validate::int_range(i64::from(self.connector_id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.connector_id), Some(0), None, path, out);
         path.pop();
         path.push_key("customData");
         if let Some(value) = &self.custom_data {
@@ -11421,7 +11421,7 @@ impl Validate for TransactionEventRequest {
         Validate::validate_at(&self.trigger_reason, path, out);
         path.pop();
         path.push_key("seqNo");
-        validate::int_range(i64::from(self.seq_no), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.seq_no), Some(0), None, path, out);
         path.pop();
         path.push_key("transactionInfo");
         Validate::validate_at(&self.transaction_info, path, out);
@@ -11443,12 +11443,12 @@ impl Validate for TransactionEventRequest {
         path.pop();
         path.push_key("numberOfPhasesUsed");
         if let Some(value) = &self.number_of_phases_used {
-            validate::int_range(i64::from(*value), Some(0.0), Some(3.0), path, out);
+            validate::int_range(i64::from(*value), Some(0), Some(3), path, out);
         }
         path.pop();
         path.push_key("reservationId");
         if let Some(value) = &self.reservation_id {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("preconditioningStatus");
@@ -11799,10 +11799,10 @@ impl UnlockConnectorRequest {
 impl Validate for UnlockConnectorRequest {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("evseId");
-        validate::int_range(i64::from(self.evse_id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.evse_id), Some(0), None, path, out);
         path.pop();
         path.push_key("connectorId");
-        validate::int_range(i64::from(self.connector_id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.connector_id), Some(0), None, path, out);
         path.pop();
         path.push_key("customData");
         if let Some(value) = &self.custom_data {
@@ -12169,7 +12169,7 @@ impl Validate for UpdateFirmwareRequest {
         path.pop();
         path.push_key("retries");
         if let Some(value) = &self.retries {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("customData");
@@ -12422,7 +12422,7 @@ impl Validate for VatNumberValidationRequest {
         path.pop();
         path.push_key("evseId");
         if let Some(value) = &self.evse_id {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("customData");
@@ -12532,7 +12532,7 @@ impl Validate for VatNumberValidationResponse {
         path.pop();
         path.push_key("evseId");
         if let Some(value) = &self.evse_id {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("customData");

@@ -6,12 +6,15 @@
 //! cargo xtask coverage [--block B] requirement-ID coverage from the test suite
 //! cargo xtask doctest-site       compile and run every Rust snippet on the website and in
 //!                                the README
-//! cargo xtask ci [--all]          run exactly what .github/workflows/ci.yml runs
+//! cargo xtask no-floats          fail if any public signature names f32/f64
+//! cargo xtask ci [--all]          run exactly what .github/workflows/ci.yml runs,
+//!                                commands and workflow env alike
 //! ```
 
 mod appendix;
 mod ci;
 mod emit;
+mod floats;
 mod model;
 mod naming;
 mod profiles;
@@ -37,13 +40,14 @@ fn main() -> Result<()> {
         "schema-report" => schema_report(),
         "coverage" => coverage(&args[1..]),
         "doctest-site" => doctest_site(),
+        "no-floats" => floats::run(),
         "ci" => ci::run(flags.contains("--all")),
         _ => {
             println!("{}", env!("CARGO_PKG_NAME"));
             println!(
                 "usage: cargo xtask <codegen [--check] | appendix [--check] | schema-report \
                         | coverage [--block <B>] [--profile <NAME>] | doctest-site \
-                        | ci [--all]>"
+                        | no-floats | ci [--all]>"
             );
             Ok(())
         }

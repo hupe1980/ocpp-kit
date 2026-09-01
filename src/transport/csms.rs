@@ -23,7 +23,9 @@ use crate::types::Identity;
 use crate::version::{Subprotocol, Version};
 
 use super::TransportError;
-use super::connection::{BoxFuture, Driver, Handle, Handler, Keepalive, SessionState, Shared};
+use super::connection::{
+    BoxFuture, Driver, Handle, Handler, Keepalive, SessionContext, SessionState, Shared,
+};
 use super::security::{Credentials, SecurityProfile};
 use super::stream::MaybeTls;
 use super::ws::handshake::{read_request, write_accept, write_refusal};
@@ -54,16 +56,28 @@ pub struct Auth {
 }
 
 /// The verdict on a connecting Charging Station.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum AuthOutcome {
-    /// Let it in.
-    Accept,
+    /// Let it in, carrying whatever the authenticator resolved about it.
+    ///
+    /// The authenticator has already looked the station up to decide this; hanging the result
+    /// on the session spares every handler the same lookup. [`AuthOutcome::accept()`] is the
+    /// short spelling for carrying nothing. See [`SessionContext`].
+    Accept(SessionContext),
     /// The credentials are wrong — answered with HTTP 401.
     Reject,
     /// The identity is not provisioned — answered with HTTP 404, as Part 4 §3.1.1 suggests,
     /// so an operator can tell a typo from a bad password.
     Unknown,
+}
+
+impl AuthOutcome {
+    /// Let the station in, carrying nothing.
+    #[must_use]
+    pub const fn accept() -> Self {
+        Self::Accept(SessionContext::empty())
+    }
 }
 
 /// Decides whether a Charging Station may connect.
@@ -90,7 +104,7 @@ pub struct AcceptEveryStation;
 
 impl Authenticator for AcceptEveryStation {
     fn authenticate(&self, _auth: Auth) -> BoxFuture<'_, AuthOutcome> {
-        Box::pin(async { AuthOutcome::Accept })
+        Box::pin(async { AuthOutcome::accept() })
     }
 }
 
@@ -559,8 +573,8 @@ impl Csms {
             offered: offered.clone(),
         };
 
-        match self.authenticator.authenticate(auth).await {
-            AuthOutcome::Accept => {}
+        let session = match self.authenticator.authenticate(auth).await {
+            AuthOutcome::Accept(session) => session,
             AuthOutcome::Reject => {
                 self.refuse(&mut socket, Some(identity), 401, "Unauthorized", remote)
                     .await;
@@ -571,7 +585,7 @@ impl Csms {
                     .await;
                 return Ok(());
             }
-        }
+        };
 
         if self.router.sessions.lock().await.len() >= self.max_connections {
             self.refuse(
@@ -641,7 +655,8 @@ impl Csms {
         .await?;
         let ws = super::ws::attach(socket, codec, &request.head.rest);
 
-        self.run_session(ws, identity, version, remote).await;
+        self.run_session(ws, identity, version, remote, session)
+            .await;
         Ok(())
     }
 
@@ -668,6 +683,7 @@ impl Csms {
         identity: Identity,
         version: Version,
         remote: SocketAddr,
+        session: SessionContext,
     ) {
         let (commands_tx, mut commands_rx) = mpsc::channel(64);
         let (events_tx, _) = broadcast::channel(256);
@@ -680,6 +696,7 @@ impl Csms {
         let shared = Arc::new(Shared {
             identity: identity.clone(),
             remote: Some(remote),
+            session,
             decode: (self.decode)(&identity),
             commands: commands_tx,
             events: events_tx,

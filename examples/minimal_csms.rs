@@ -64,6 +64,11 @@ impl Handler for MyCsms {
 impl MyCsms {
     fn record(&self, identity: &ocpp_kit::types::Identity, observed: &Observed) {
         println!("[{identity}] {:?}", observed.event);
+        // Rare, and worth a log line every time: each one is a station saying something
+        // malformed about a value that decides money, and each one otherwise fails silently.
+        for warning in &observed.warnings {
+            println!("  !! {warning}");
+        }
         let Some(event) = ocpp_kit::csms::events::to_ledger_event(identity, observed) else {
             return;
         };
@@ -79,6 +84,32 @@ impl MyCsms {
             Ingested::Duplicate => println!("  (already recorded — not billed again)"),
             Ingested::AppliedWithGap { missing } => println!("  (missing seqNo {missing:?})"),
             other => println!("  ({other:?})"),
+        }
+        let Some(record) = ledger.transaction(identity, &event.transaction_id) else {
+            return;
+        };
+        // The station's own registers, subtracted exactly: two decimals in, one decimal out,
+        // no f64 anywhere. That makes it a reliable *operational* figure — it is not
+        // automatically a billable one. The registers are whatever the meter chose to report,
+        // and in the OCA's own example message `meterStop` is the meter's lifetime total
+        // while the signed record beside it reports the session.
+        if let Some(energy) = record.energy_wh() {
+            println!("  ({energy} Wh between the reported registers)");
+        }
+        // Where calibration law applies, this is the value a customer may be billed for. It
+        // is carried through untouched; verifying it needs the meter's public key from
+        // somewhere other than this socket.
+        for signed in &record.signed {
+            let context = signed.context.as_deref().unwrap_or("no context");
+            let method = signed
+                .value
+                .encoding_method
+                .as_deref()
+                .unwrap_or("unspecified");
+            println!(
+                "  (signed {method} record, {context}, {} bytes)",
+                signed.value.signed_meter_data.len()
+            );
         }
     }
 }
@@ -149,7 +180,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "handshake from {} as {} ({})",
                 auth.remote, auth.identity, auth.profile
             );
-            AuthOutcome::Accept
+            AuthOutcome::accept()
         })
         .handler(SharedHandler(handler.clone()))
         .build()?;

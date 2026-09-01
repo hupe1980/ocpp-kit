@@ -354,13 +354,7 @@ impl AbsolutePriceSchedule {
 impl Validate for AbsolutePriceSchedule {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("priceScheduleID");
-        validate::int_range(
-            i64::from(self.price_schedule_id),
-            Some(0.0),
-            None,
-            path,
-            out,
-        );
+        validate::int_range(i64::from(self.price_schedule_id), Some(0), None, path, out);
         path.pop();
         path.push_key("currency");
         validate::string(self.currency.as_str(), None, Some(3), path, out);
@@ -772,16 +766,28 @@ impl BatteryData {
 impl Validate for BatteryData {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("evseId");
-        validate::int_range(i64::from(self.evse_id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.evse_id), Some(0), None, path, out);
         path.pop();
         path.push_key("serialNumber");
         validate::string(self.serial_number.as_str(), None, Some(50), path, out);
         path.pop();
         path.push_key("soC");
-        validate::range(self.so_c.get(), Some(0.0), Some(100.0), path, out);
+        validate::range(
+            self.so_c,
+            Some(crate::types::Decimal::new(0, 0)),
+            Some(crate::types::Decimal::new(100, 0)),
+            path,
+            out,
+        );
         path.pop();
         path.push_key("soH");
-        validate::range(self.so_h.get(), Some(0.0), Some(100.0), path, out);
+        validate::range(
+            self.so_h,
+            Some(crate::types::Decimal::new(0, 0)),
+            Some(crate::types::Decimal::new(100, 0)),
+            path,
+            out,
+        );
         path.pop();
         path.push_key("vendorInfo");
         if let Some(value) = &self.vendor_info {
@@ -1603,7 +1609,7 @@ impl ChargingProfile {
 impl Validate for ChargingProfile {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("stackLevel");
-        validate::int_range(i64::from(self.stack_level), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.stack_level), Some(0), None, path, out);
         path.pop();
         path.push_key("chargingProfilePurpose");
         Validate::validate_at(&self.charging_profile_purpose, path, out);
@@ -1724,7 +1730,7 @@ impl Validate for ChargingProfileCriterion {
         path.pop();
         path.push_key("stackLevel");
         if let Some(value) = &self.stack_level {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("chargingProfileId");
@@ -1966,7 +1972,7 @@ impl Validate for ChargingSchedule {
         path.pop();
         path.push_key("signatureId");
         if let Some(value) = &self.signature_id {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("digestValue");
@@ -1976,7 +1982,7 @@ impl Validate for ChargingSchedule {
         path.pop();
         path.push_key("randomizedDelay");
         if let Some(value) = &self.randomized_delay {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("salesTariff");
@@ -2285,27 +2291,45 @@ impl Validate for ChargingSchedulePeriod {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("numberPhases");
         if let Some(value) = &self.number_phases {
-            validate::int_range(i64::from(*value), Some(0.0), Some(3.0), path, out);
+            validate::int_range(i64::from(*value), Some(0), Some(3), path, out);
         }
         path.pop();
         path.push_key("phaseToUse");
         if let Some(value) = &self.phase_to_use {
-            validate::int_range(i64::from(*value), Some(0.0), Some(3.0), path, out);
+            validate::int_range(i64::from(*value), Some(0), Some(3), path, out);
         }
         path.pop();
         path.push_key("dischargeLimit");
         if let Some(value) = &self.discharge_limit {
-            validate::range(value.get(), None, Some(0.0), path, out);
+            validate::range(
+                *value,
+                None,
+                Some(crate::types::Decimal::new(0, 0)),
+                path,
+                out,
+            );
         }
         path.pop();
         path.push_key("dischargeLimit_L2");
         if let Some(value) = &self.discharge_limit_l2 {
-            validate::range(value.get(), None, Some(0.0), path, out);
+            validate::range(
+                *value,
+                None,
+                Some(crate::types::Decimal::new(0, 0)),
+                path,
+                out,
+            );
         }
         path.pop();
         path.push_key("dischargeLimit_L3");
         if let Some(value) = &self.discharge_limit_l3 {
-            validate::range(value.get(), None, Some(0.0), path, out);
+            validate::range(
+                *value,
+                None,
+                Some(crate::types::Decimal::new(0, 0)),
+                path,
+                out,
+            );
         }
         path.pop();
         path.push_key("operationMode");
@@ -2508,17 +2532,35 @@ impl Validate for ChargingScheduleUpdate {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("dischargeLimit");
         if let Some(value) = &self.discharge_limit {
-            validate::range(value.get(), None, Some(0.0), path, out);
+            validate::range(
+                *value,
+                None,
+                Some(crate::types::Decimal::new(0, 0)),
+                path,
+                out,
+            );
         }
         path.pop();
         path.push_key("dischargeLimit_L2");
         if let Some(value) = &self.discharge_limit_l2 {
-            validate::range(value.get(), None, Some(0.0), path, out);
+            validate::range(
+                *value,
+                None,
+                Some(crate::types::Decimal::new(0, 0)),
+                path,
+                out,
+            );
         }
         path.pop();
         path.push_key("dischargeLimit_L3");
         if let Some(value) = &self.discharge_limit_l3 {
-            validate::range(value.get(), None, Some(0.0), path, out);
+            validate::range(
+                *value,
+                None,
+                Some(crate::types::Decimal::new(0, 0)),
+                path,
+                out,
+            );
         }
         path.pop();
         path.push_key("customData");
@@ -2693,7 +2735,7 @@ impl Validate for ClearChargingProfile {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("evseId");
         if let Some(value) = &self.evse_id {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("chargingProfilePurpose");
@@ -2703,7 +2745,7 @@ impl Validate for ClearChargingProfile {
         path.pop();
         path.push_key("stackLevel");
         if let Some(value) = &self.stack_level {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("customData");
@@ -2764,7 +2806,7 @@ impl Validate for ClearMonitoringResult {
         Validate::validate_at(&self.status, path, out);
         path.pop();
         path.push_key("id");
-        validate::int_range(i64::from(self.id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.id), Some(0), None, path, out);
         path.pop();
         path.push_key("statusInfo");
         if let Some(value) = &self.status_info {
@@ -3045,7 +3087,7 @@ impl CompositeSchedule {
 impl Validate for CompositeSchedule {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("evseId");
-        validate::int_range(i64::from(self.evse_id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.evse_id), Some(0), None, path, out);
         path.pop();
         path.push_key("chargingRateUnit");
         Validate::validate_at(&self.charging_rate_unit, path, out);
@@ -3111,7 +3153,7 @@ impl ConstantStreamData {
 impl Validate for ConstantStreamData {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("id");
-        validate::int_range(i64::from(self.id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.id), Some(0), None, path, out);
         path.pop();
         path.push_key("params");
         Validate::validate_at(&self.params, path, out);
@@ -3119,7 +3161,7 @@ impl Validate for ConstantStreamData {
         path.push_key("variableMonitoringId");
         validate::int_range(
             i64::from(self.variable_monitoring_id),
-            Some(0.0),
+            Some(0),
             None,
             path,
             out,
@@ -3525,17 +3567,17 @@ impl Validate for DCChargingParameters {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("stateOfCharge");
         if let Some(value) = &self.state_of_charge {
-            validate::int_range(i64::from(*value), Some(0.0), Some(100.0), path, out);
+            validate::int_range(i64::from(*value), Some(0), Some(100), path, out);
         }
         path.pop();
         path.push_key("fullSoC");
         if let Some(value) = &self.full_so_c {
-            validate::int_range(i64::from(*value), Some(0.0), Some(100.0), path, out);
+            validate::int_range(i64::from(*value), Some(0), Some(100), path, out);
         }
         path.pop();
         path.push_key("bulkSoC");
         if let Some(value) = &self.bulk_so_c {
-            validate::int_range(i64::from(*value), Some(0.0), Some(100.0), path, out);
+            validate::int_range(i64::from(*value), Some(0), Some(100), path, out);
         }
         path.pop();
         path.push_key("customData");
@@ -4357,7 +4399,7 @@ impl Validate for DERCurve {
         }
         path.pop();
         path.push_key("priority");
-        validate::int_range(i64::from(self.priority), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.priority), Some(0), None, path, out);
         path.pop();
         path.push_key("yUnit");
         Validate::validate_at(&self.y_unit, path, out);
@@ -4891,11 +4933,11 @@ impl EVSE {
 impl Validate for EVSE {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("id");
-        validate::int_range(i64::from(self.id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.id), Some(0), None, path, out);
         path.pop();
         path.push_key("connectorId");
         if let Some(value) = &self.connector_id {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("customData");
@@ -4995,7 +5037,7 @@ impl EnterService {
 impl Validate for EnterService {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("priority");
-        validate::int_range(i64::from(self.priority), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.priority), Some(0), None, path, out);
         path.pop();
         path.push_key("customData");
         if let Some(value) = &self.custom_data {
@@ -5200,7 +5242,7 @@ impl EventData {
 impl Validate for EventData {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("eventId");
-        validate::int_range(i64::from(self.event_id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.event_id), Some(0), None, path, out);
         path.pop();
         path.push_key("trigger");
         Validate::validate_at(&self.trigger, path, out);
@@ -5219,7 +5261,7 @@ impl Validate for EventData {
         path.pop();
         path.push_key("cause");
         if let Some(value) = &self.cause {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("techCode");
@@ -5239,12 +5281,12 @@ impl Validate for EventData {
         path.pop();
         path.push_key("variableMonitoringId");
         if let Some(value) = &self.variable_monitoring_id {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("severity");
         if let Some(value) = &self.severity {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("customData");
@@ -5417,7 +5459,7 @@ impl FixedPF {
 impl Validate for FixedPF {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("priority");
-        validate::int_range(i64::from(self.priority), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.priority), Some(0), None, path, out);
         path.pop();
         path.push_key("customData");
         if let Some(value) = &self.custom_data {
@@ -5552,7 +5594,7 @@ impl FixedVar {
 impl Validate for FixedVar {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("priority");
-        validate::int_range(i64::from(self.priority), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.priority), Some(0), None, path, out);
         path.pop();
         path.push_key("unit");
         Validate::validate_at(&self.unit, path, out);
@@ -5709,7 +5751,7 @@ impl FreqDroop {
 impl Validate for FreqDroop {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("priority");
-        validate::int_range(i64::from(self.priority), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.priority), Some(0), None, path, out);
         path.pop();
         path.push_key("customData");
         if let Some(value) = &self.custom_data {
@@ -6005,7 +6047,7 @@ impl Gradient {
 impl Validate for Gradient {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("priority");
-        validate::int_range(i64::from(self.priority), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.priority), Some(0), None, path, out);
         path.pop();
         path.push_key("customData");
         if let Some(value) = &self.custom_data {
@@ -6353,7 +6395,7 @@ impl Validate for IdTokenInfo {
             validate::list_len(value.len(), Some(1), None, path, out);
             for (index, item) in value.iter().enumerate() {
                 path.push_index(index);
-                validate::int_range(i64::from(*item), Some(0.0), None, path, out);
+                validate::int_range(i64::from(*item), Some(0), None, path, out);
                 path.pop();
             }
         }
@@ -6407,7 +6449,7 @@ impl LimitAtSoC {
 impl Validate for LimitAtSoC {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("soc");
-        validate::int_range(i64::from(self.soc), Some(0.0), Some(100.0), path, out);
+        validate::int_range(i64::from(self.soc), Some(0), Some(100), path, out);
         path.pop();
         path.push_key("customData");
         if let Some(value) = &self.custom_data {
@@ -6498,7 +6540,7 @@ impl LimitMaxDischarge {
 impl Validate for LimitMaxDischarge {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("priority");
-        validate::int_range(i64::from(self.priority), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.priority), Some(0), None, path, out);
         path.pop();
         path.push_key("powerMonitoringMustTrip");
         if let Some(value) = &self.power_monitoring_must_trip {
@@ -6824,7 +6866,7 @@ impl MessageInfo {
 impl Validate for MessageInfo {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("id");
-        validate::int_range(i64::from(self.id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.id), Some(0), None, path, out);
         path.pop();
         path.push_key("priority");
         Validate::validate_at(&self.priority, path, out);
@@ -7179,7 +7221,7 @@ impl Validate for NetworkConnectionProfile {
         validate::string(self.ocpp_csms_url.as_str(), None, Some(2000), path, out);
         path.pop();
         path.push_key("securityProfile");
-        validate::int_range(i64::from(self.security_profile), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.security_profile), Some(0), None, path, out);
         path.pop();
         path.push_key("apn");
         if let Some(value) = &self.apn {
@@ -7497,12 +7539,12 @@ impl Validate for PeriodicEventStreamParams {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("interval");
         if let Some(value) = &self.interval {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("values");
         if let Some(value) = &self.values {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("customData");
@@ -7670,18 +7712,12 @@ impl Validate for PriceLevelSchedule {
         }
         path.pop();
         path.push_key("priceScheduleId");
-        validate::int_range(
-            i64::from(self.price_schedule_id),
-            Some(0.0),
-            None,
-            path,
-            out,
-        );
+        validate::int_range(i64::from(self.price_schedule_id), Some(0), None, path, out);
         path.pop();
         path.push_key("numberOfPriceLevels");
         validate::int_range(
             i64::from(self.number_of_price_levels),
-            Some(0.0),
+            Some(0),
             None,
             path,
             out,
@@ -7738,7 +7774,7 @@ impl PriceLevelScheduleEntry {
 impl Validate for PriceLevelScheduleEntry {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("priceLevel");
-        validate::int_range(i64::from(self.price_level), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.price_level), Some(0), None, path, out);
         path.pop();
         path.push_key("customData");
         if let Some(value) = &self.custom_data {
@@ -7843,12 +7879,12 @@ impl Validate for PriceRule {
         path.pop();
         path.push_key("carbonDioxideEmission");
         if let Some(value) = &self.carbon_dioxide_emission {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("renewableGenerationPercentage");
         if let Some(value) = &self.renewable_generation_percentage {
-            validate::int_range(i64::from(*value), Some(0.0), Some(100.0), path, out);
+            validate::int_range(i64::from(*value), Some(0), Some(100), path, out);
         }
         path.pop();
         path.push_key("parkingFee");
@@ -8227,7 +8263,7 @@ impl SalesTariff {
 impl Validate for SalesTariff {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("id");
-        validate::int_range(i64::from(self.id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.id), Some(0), None, path, out);
         path.pop();
         path.push_key("salesTariffEntry");
         validate::list_len(
@@ -8250,7 +8286,7 @@ impl Validate for SalesTariff {
         path.pop();
         path.push_key("numEPriceLevels");
         if let Some(value) = &self.num_e_price_levels {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("customData");
@@ -8322,7 +8358,7 @@ impl Validate for SalesTariffEntry {
         path.pop();
         path.push_key("ePriceLevel");
         if let Some(value) = &self.e_price_level {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("consumptionCost");
@@ -8597,7 +8633,7 @@ impl Validate for SetMonitoringData {
         Validate::validate_at(&self.r#type, path, out);
         path.pop();
         path.push_key("severity");
-        validate::int_range(i64::from(self.severity), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.severity), Some(0), None, path, out);
         path.pop();
         path.push_key("component");
         Validate::validate_at(&self.component, path, out);
@@ -8607,7 +8643,7 @@ impl Validate for SetMonitoringData {
         path.pop();
         path.push_key("id");
         if let Some(value) = &self.id {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("periodicEventStream");
@@ -8732,11 +8768,11 @@ impl Validate for SetMonitoringResult {
         Validate::validate_at(&self.variable, path, out);
         path.pop();
         path.push_key("severity");
-        validate::int_range(i64::from(self.severity), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.severity), Some(0), None, path, out);
         path.pop();
         path.push_key("id");
         if let Some(value) = &self.id {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("statusInfo");
@@ -9436,7 +9472,7 @@ impl Validate for TariffAssignment {
             validate::list_len(value.len(), Some(1), None, path, out);
             for (index, item) in value.iter().enumerate() {
                 path.push_index(index);
-                validate::int_range(i64::from(*item), Some(0.0), None, path, out);
+                validate::int_range(i64::from(*item), Some(0), None, path, out);
                 path.pop();
             }
         }
@@ -10357,7 +10393,7 @@ impl Validate for TaxRate {
         path.pop();
         path.push_key("stack");
         if let Some(value) = &self.stack {
-            validate::int_range(i64::from(*value), Some(0.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(0), None, path, out);
         }
         path.pop();
         path.push_key("customData");
@@ -10454,7 +10490,7 @@ impl TaxRule {
 impl Validate for TaxRule {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("taxRuleID");
-        validate::int_range(i64::from(self.tax_rule_id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.tax_rule_id), Some(0), None, path, out);
         path.pop();
         path.push_key("taxRate");
         Validate::validate_at(&self.tax_rate, path, out);
@@ -10978,7 +11014,7 @@ impl Validate for TransactionLimit {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("maxSoC");
         if let Some(value) = &self.max_so_c {
-            validate::int_range(i64::from(*value), Some(0.0), Some(100.0), path, out);
+            validate::int_range(i64::from(*value), Some(0), Some(100), path, out);
         }
         path.pop();
         path.push_key("customData");
@@ -11419,7 +11455,7 @@ impl Validate for V2XChargingParameters {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("targetSoC");
         if let Some(value) = &self.target_so_c {
-            validate::int_range(i64::from(*value), Some(0.0), Some(100.0), path, out);
+            validate::int_range(i64::from(*value), Some(0), Some(100), path, out);
         }
         path.pop();
         path.push_key("customData");
@@ -11895,7 +11931,7 @@ impl Validate for VariableCharacteristics {
         path.pop();
         path.push_key("maxElements");
         if let Some(value) = &self.max_elements {
-            validate::int_range(i64::from(*value), Some(1.0), None, path, out);
+            validate::int_range(i64::from(*value), Some(1), None, path, out);
         }
         path.pop();
         path.push_key("valuesList");
@@ -11991,13 +12027,13 @@ impl VariableMonitoring {
 impl Validate for VariableMonitoring {
     fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
         path.push_key("id");
-        validate::int_range(i64::from(self.id), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.id), Some(0), None, path, out);
         path.pop();
         path.push_key("type");
         Validate::validate_at(&self.r#type, path, out);
         path.pop();
         path.push_key("severity");
-        validate::int_range(i64::from(self.severity), Some(0.0), None, path, out);
+        validate::int_range(i64::from(self.severity), Some(0), None, path, out);
         path.pop();
         path.push_key("eventNotificationType");
         Validate::validate_at(&self.event_notification_type, path, out);

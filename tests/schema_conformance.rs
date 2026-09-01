@@ -14,39 +14,16 @@
 
 mod support;
 
-use std::path::{Path, PathBuf};
-
 use ocpp_kit::RawValue;
 use ocpp_kit::Version;
 use ocpp_kit::decode::DecodeOptions;
 use serde_json::Value;
 
-use support::{Generator, differences, validate};
+use support::{Generator, differences, schema_path, validate};
 
 /// How many random instances per schema. Raise it locally to hunt for a rare case; the
 /// generator is deterministic, so a failure always reproduces.
 const INSTANCES_PER_SCHEMA: u64 = 24;
-
-fn schemas_dir(version: Version) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("schemas")
-        .join(version.slug())
-}
-
-/// Locates the schema file for one action, honouring 1.6's unsuffixed request files and
-/// 2.1's response-less `NotifyPeriodicEventStream`.
-fn schema_path(version: Version, action: &str, response: bool) -> Option<PathBuf> {
-    let dir = schemas_dir(version);
-    let candidates = if response {
-        vec![format!("{action}Response.json")]
-    } else {
-        vec![format!("{action}Request.json"), format!("{action}.json")]
-    };
-    candidates
-        .into_iter()
-        .map(|name| dir.join(name))
-        .find(|path| path.exists())
-}
 
 type Transcode = fn(&str, bool, &RawValue, &DecodeOptions) -> Result<Box<RawValue>, String>;
 
@@ -129,3 +106,38 @@ version_suite!(ocpp_16_types_match_the_schemas, Version::V1_6, v1_6);
 version_suite!(ocpp_201_types_match_the_schemas, Version::V2_0_1, v2_0_1);
 #[cfg(feature = "v2_1")]
 version_suite!(ocpp_21_types_match_the_schemas, Version::V2_1, v2_1);
+
+/// A meter's resolution is a claim about accuracy, and the JSON number that carries it is the
+/// only place the claim lives: `2935.600` says three decimals, `2935.6` says one, and an
+/// `f64` cannot tell them apart. So the round trip has to preserve the *token*, not merely
+/// the value — this checks the whole decode-and-re-encode path, not just the number type.
+#[test]
+fn a_number_goes_back_out_spelled_exactly_as_it_arrived() {
+    use ocpp_kit::v2_1::{Action, transcode_request};
+
+    let payload = RawValue::from_string(
+        r#"{"eventType":"Ended","timestamp":"2024-01-01T00:00:00Z","triggerReason":"StopAuthorized",
+            "seqNo":7,"transactionInfo":{"transactionId":"tx-1"},
+            "meterValue":[{"timestamp":"2024-01-01T00:00:00Z","sampledValue":[
+                {"value":2935.600,"measurand":"Energy.Active.Import.Register",
+                 "unitOfMeasure":{"unit":"kWh"}},
+                {"value":7,"measurand":"Power.Active.Import"},
+                {"value":-0.250,"measurand":"Current.Import"}]}]}"#
+            .to_string(),
+    )
+    .unwrap();
+
+    let produced = transcode_request(
+        Action::TransactionEvent,
+        &payload,
+        &DecodeOptions::pedantic(),
+    )
+    .expect("decodes");
+    let text = produced.get();
+    for number in ["2935.600", "7", "-0.250"] {
+        assert!(
+            text.contains(number),
+            "{number} did not survive the round trip: {text}"
+        );
+    }
+}

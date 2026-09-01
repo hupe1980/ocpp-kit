@@ -16,7 +16,7 @@ use ocpp_kit::station::transactions::{
 };
 use ocpp_kit::transport::{BasicAuthPassword, BoxFuture, Ctx, Handler, SecurityProfile, Station};
 use ocpp_kit::types::DateTime;
-use ocpp_kit::{Version, v2_1};
+use ocpp_kit::{Version, decimal, v2_1};
 
 /// Answers the requests a CSMS sends to a station.
 struct MyStation;
@@ -156,13 +156,40 @@ async fn send(
         // `TxEvent` is `#[non_exhaustive]`, so new event kinds cannot break this example.
         _ => return Ok(()),
     };
+    // A meter register with three decimals of resolution, in kWh. Both the resolution and
+    // the unit conversion survive: the CSMS reads 2935600 Wh, not 2935599.9999999995.
+    let register = match kind {
+        v2_1::TransactionEventEnum::Started => decimal!(2935.600),
+        v2_1::TransactionEventEnum::Ended => decimal!(2952.100),
+        _ => decimal!(2941.750),
+    };
     let request = v2_1::TransactionEventRequest::new(
         kind.clone(),
         timestamp,
         v2_1::TriggerReason::from_wire(trigger),
         seq_no,
         v2_1::Transaction::new(event.transaction_id()),
-    );
+    )
+    .with_meter_value(vec![v2_1::MeterValue::new(
+        vec![
+            v2_1::SampledValue::new(register)
+                .with_measurand(v2_1::Measurand::EnergyActiveImportRegister)
+                .with_unit_of_measure(v2_1::UnitOfMeasure::new().with_unit("kWh"))
+                .with_context(match kind {
+                    v2_1::TransactionEventEnum::Started => v2_1::ReadingContext::TransactionBegin,
+                    v2_1::TransactionEventEnum::Ended => v2_1::ReadingContext::TransactionEnd,
+                    _ => v2_1::ReadingContext::SamplePeriodic,
+                })
+                // Where calibration law applies, this — not the number above it — is what
+                // the customer may be billed for. A real station's meter produces the blob;
+                // this one stands in for it.
+                .with_signed_meter_value(
+                    v2_1::SignedMeterValue::new("T0NNRnx7IlJEIjpbXX0=", "OCMF")
+                        .with_public_key("MzA1OQ=="),
+                ),
+        ],
+        timestamp,
+    )]);
     handle.call(request).await?;
     println!("-> TransactionEvent({kind:?}) seqNo {seq_no}");
     Ok(())

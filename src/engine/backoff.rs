@@ -44,24 +44,80 @@ impl Backoff {
 
     /// The wait before retry number `attempt` (`0` is the first retry).
     ///
-    /// `jitter` must be a uniformly distributed value in `0.0 ..= 1.0`; the caller supplies
-    /// it so that the schedule stays deterministic under test and the engine needs no
-    /// entropy source of its own.
+    /// The caller supplies the [`Jitter`] so that the schedule stays deterministic under test
+    /// and the engine needs no entropy source of its own.
     #[must_use]
-    pub fn delay(&self, attempt: u32, jitter: f64) -> Duration {
-        let doublings = attempt.min(self.repeat_times);
-        let factor = 1u64 << doublings.min(32);
+    pub const fn delay(&self, attempt: u32, jitter: Jitter) -> Duration {
+        let doublings = if attempt < self.repeat_times {
+            attempt
+        } else {
+            self.repeat_times
+        };
+        let factor = 1u64 << if doublings < 32 { doublings } else { 32 };
+        // The doubling is capped at 32, so `factor` fits a u32 long before the guard below
+        // is reached; the guard is what makes that a fact rather than an assumption.
+        #[allow(clippy::cast_possible_truncation)]
         let base = self
             .wait_minimum
-            .saturating_mul(u32::try_from(factor).unwrap_or(u32::MAX));
-        let jitter = jitter.clamp(0.0, 1.0);
-        #[allow(
-            clippy::cast_precision_loss,
-            clippy::cast_sign_loss,
-            clippy::cast_possible_truncation
-        )]
-        let spread = Duration::from_millis((self.random_range.as_millis() as f64 * jitter) as u64);
-        base.saturating_add(spread)
+            .saturating_mul(if factor > u32::MAX as u64 {
+                u32::MAX
+            } else {
+                factor as u32
+            });
+        let spread = jitter.of_millis(self.random_range.as_millis());
+        base.saturating_add(Duration::from_millis(spread))
+    }
+}
+
+/// How much of a back-off's random range to add, as a fraction of `u32::MAX`.
+///
+/// Integer rather than floating point, so the schedule a test asserts is the schedule that
+/// runs: `Jitter::from_ratio(1, 2)` is exactly half the range on every platform, which
+/// `0.5f64` multiplied into a duration is not.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Jitter(u32);
+
+impl Jitter {
+    /// No jitter — the shortest wait §5.4 allows.
+    pub const NONE: Self = Self(0);
+    /// The whole random range.
+    pub const FULL: Self = Self(u32::MAX);
+
+    /// A uniformly drawn `u32` — four bytes straight from an entropy source — as a jitter.
+    #[must_use]
+    pub const fn from_random_u32(value: u32) -> Self {
+        Self(value)
+    }
+
+    /// `numerator / denominator` of the range, clamped to `0 ..= 1`.
+    ///
+    /// # Panics
+    ///
+    /// If `denominator` is zero.
+    #[must_use]
+    pub const fn from_ratio(numerator: u32, denominator: u32) -> Self {
+        assert!(denominator != 0, "a jitter ratio needs a denominator");
+        if numerator >= denominator {
+            return Self::FULL;
+        }
+        // Rounded, so `from_ratio(1, 2)` is exactly half a range of any width.
+        let scaled =
+            (numerator as u64 * u32::MAX as u64 + denominator as u64 / 2) / denominator as u64;
+        // `numerator < denominator` by the branch above, so the quotient is below `u32::MAX`.
+        #[allow(clippy::cast_possible_truncation)]
+        Self(scaled as u32)
+    }
+
+    /// This fraction of `millis`, rounded to the nearest millisecond.
+    const fn of_millis(self, millis: u128) -> u64 {
+        let whole = u32::MAX as u128;
+        let scaled = (millis * self.0 as u128 + whole / 2) / whole;
+        #[allow(clippy::cast_possible_truncation)]
+        if scaled > u64::MAX as u128 {
+            u64::MAX
+        } else {
+            scaled as u64
+        }
     }
 }
 
@@ -72,7 +128,7 @@ mod tests {
     #[test]
     fn doubles_then_plateaus_per_part_4_5_4() {
         let backoff = Backoff::default();
-        let seconds = |attempt| backoff.delay(attempt, 0.0).as_secs();
+        let seconds = |attempt| backoff.delay(attempt, Jitter::NONE).as_secs();
         assert_eq!(seconds(0), 10);
         assert_eq!(seconds(1), 20);
         assert_eq!(seconds(2), 40);
@@ -85,8 +141,11 @@ mod tests {
     #[test]
     fn jitter_is_added_on_top_of_every_wait() {
         let backoff = Backoff::default();
-        assert_eq!(backoff.delay(0, 1.0).as_secs(), 20);
-        assert_eq!(backoff.delay(0, 0.5).as_millis(), 15_000);
-        assert_eq!(backoff.delay(3, 1.0).as_secs(), 90);
+        assert_eq!(backoff.delay(0, Jitter::FULL).as_secs(), 20);
+        assert_eq!(
+            backoff.delay(0, Jitter::from_ratio(1, 2)).as_millis(),
+            15_000
+        );
+        assert_eq!(backoff.delay(3, Jitter::FULL).as_secs(), 90);
     }
 }

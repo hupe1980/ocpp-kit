@@ -79,7 +79,7 @@ use crate::rpc::{CallError, CallErrorRef, ErrorCode, Frame, FrameError, FrameRep
 use crate::types::{DateTime, IdGenerator, MessageId};
 use crate::version::Version;
 
-pub use backoff::Backoff;
+pub use backoff::{Backoff, Jitter};
 pub use queue::{MemStore, MessageStore, QueuedCall, RetryPolicy, Seq, StoreError};
 #[cfg(feature = "std")]
 pub use store_file::FileStore;

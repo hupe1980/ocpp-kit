@@ -28,6 +28,8 @@ use alloc::borrow::ToOwned;
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
 use alloc::vec::Vec;
+
+use crate::types::Decimal;
 use core::fmt;
 
 /// Which attribute of a variable is meant.
@@ -173,7 +175,7 @@ impl DataType {
             DataType::String => true,
             DataType::Boolean => matches!(value, "true" | "false"),
             DataType::Integer => value.parse::<i64>().is_ok(),
-            DataType::Decimal => value.parse::<f64>().is_ok_and(f64::is_finite),
+            DataType::Decimal => value.parse::<Decimal>().is_ok(),
             DataType::DateTime => crate::types::DateTime::parse(value).is_ok(),
             DataType::OptionList => {
                 values_list.is_empty() || values_list.iter().any(|v| v == value)
@@ -303,8 +305,8 @@ pub struct VariableSpec {
     mutability: Mutability,
     unit: Option<String>,
     values_list: Vec<String>,
-    min_limit: Option<f64>,
-    max_limit: Option<f64>,
+    min_limit: Option<Decimal>,
+    max_limit: Option<Decimal>,
     persistent: bool,
     constant: bool,
     /// Whether a write only takes effect after a reboot — the 2.x equivalent of 1.6's
@@ -369,8 +371,12 @@ impl VariableSpec {
     }
 
     /// Restricts a numeric variable to a range.
+    ///
+    /// The bounds are exact decimals, so a limit of `0.1` rejects exactly what it says it
+    /// rejects — the device model's values are decimal *text* on the wire, and comparing
+    /// them through a float is how a conforming value comes to be refused.
     #[must_use]
-    pub fn limits(mut self, min: Option<f64>, max: Option<f64>) -> Self {
+    pub fn limits(mut self, min: Option<Decimal>, max: Option<Decimal>) -> Self {
         self.min_limit = min;
         self.max_limit = max;
         self
@@ -475,9 +481,9 @@ pub struct ReportDatum {
     /// The accepted values, if restricted.
     pub values_list: Vec<String>,
     /// The lower numeric bound, if any.
-    pub min_limit: Option<f64>,
+    pub min_limit: Option<Decimal>,
     /// The upper numeric bound, if any.
-    pub max_limit: Option<f64>,
+    pub max_limit: Option<Decimal>,
     /// Whether the value survives a reboot.
     pub persistent: bool,
     /// Whether the value can never change.
@@ -697,7 +703,7 @@ impl DeviceModel {
             return SetStatus::Rejected;
         }
         if matches!(spec.data_type, DataType::Integer | DataType::Decimal) {
-            if let Ok(number) = value.parse::<f64>() {
+            if let Ok(number) = value.parse::<Decimal>() {
                 if spec.min_limit.is_some_and(|min| number < min)
                     || spec.max_limit.is_some_and(|max| number > max)
                 {
@@ -898,7 +904,7 @@ fn defaults() -> Vec<(ComponentKey, VariableSpec)> {
         (
             ComponentKey::new("SecurityCtrlr"),
             VariableSpec::new("SecurityProfile", Integer)
-                .limits(Some(1.0), Some(3.0))
+                .limits(Some(Decimal::from(1)), Some(Decimal::from(3)))
                 .value("1"),
         ),
         (

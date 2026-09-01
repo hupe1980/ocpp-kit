@@ -80,6 +80,34 @@ $ ocpp-cli replay session.ocppcap --version 2.1
 
 Exit status is non-zero when anything did not check out, so it drops into CI.
 
+## `signed` — read a signed meter value the way a CSMS has to
+
+Both fields of a `SignedMeterValueType` hide something: `signedMeterData` is specified as
+Base64 but is often sent as `OCMF|…` text, and `publicKey` is specified as an `oca:` envelope
+but is often sent as Base64 over plain hexadecimal. Getting either wrong is quiet — the
+station keeps sending and its sessions stop being billable — so this is the loop for finding
+out what a particular station does before writing an integration around a guess.
+
+```console
+$ ocpp-cli signed --key MzA1OTMwMTMwNjA3MkE4NjQ4Q0UzRDAyMDEwNjA4MkE4NjQ4Q0UzRDAzMDEwNw==
+publicKey:      23 bytes, sent as PrintedHex
+  printed:      3059301306072A8648CE3D020106082A8648CE3D030107
+  hex:          3059301306072A8648CE3D020106082A8648CE3D030107
+note: the key is what the station *claims*. Verify against one obtained out of band.
+
+$ echo '{"signedMeterData":"T0NNRnx7fQ==","encodingMethod":"OCMF"}' | ocpp-cli signed
+encodingMethod: OCMF
+signingMethod:  <absent>
+record:         7 bytes, OCMF text
+
+OCMF|{}
+publicKey:      absent
+```
+
+It takes the 1.6 `SignedData` `value` string as readily as the 2.x object — including with its
+JSON quoting still on, which is how it comes out of a capture. See
+[signed meter values](@/docs/metering.md).
+
 ## `csms` and `station` — mock peers
 
 ```console
@@ -107,5 +135,8 @@ $ cargo xtask coverage                       # requirement IDs cited by the sour
 $ cargo xtask coverage --block B02           # …just one block
 $ cargo xtask coverage --profile core        # how much of a certification profile is driven
 $ cargo xtask schema-report                  # actions, enums and types per version and block
-$ cargo xtask ci                             # run what CI runs, before pushing
+$ cargo xtask no-floats                      # fail if an f32/f64 reaches a public signature
+$ cargo xtask ci                             # run what CI runs, before pushing — the
+                                             #   commands *and* the workflow's env, so
+                                             #   `-D warnings` means the same thing here
 ```

@@ -10,7 +10,7 @@ use tokio::sync::{broadcast, mpsc, watch};
 
 use crate::decode::DecodeOptions;
 use crate::engine::{
-    Backoff, BootState, CallFailure, Engine, EngineConfig, MemStore, MessageStore, Role,
+    Backoff, BootState, CallFailure, Engine, EngineConfig, Jitter, MemStore, MessageStore, Role,
 };
 use crate::types::Identity;
 use crate::version::{Subprotocol, Version};
@@ -384,6 +384,8 @@ impl<S: MessageStore + Send + 'static> Station<S> {
             queued: 0,
         });
         let shared = Arc::new(Shared {
+            // A station has no authenticator to resolve anything about itself.
+            session: super::connection::SessionContext::empty(),
             identity: self.connector.identity.clone(),
             remote: None,
             decode: self.decode.clone(),
@@ -670,18 +672,18 @@ impl Endpoint {
     }
 }
 
-/// A jitter value in `0.0 ..= 1.0` for the reconnect back-off (Part 4 §5.4).
+/// A jitter value for the reconnect back-off (Part 4 §5.4).
 ///
 /// Drawn from the operating system rather than the clock. The whole point of §5.4's random
 /// range is that a fleet coming back after a CSMS restart does not arrive together — and a
 /// fleet is exactly the population whose clocks are synchronised to the same NTP source, so
 /// clock-derived "randomness" is correlated precisely when it must not be.
-fn jitter() -> f64 {
+fn jitter() -> Jitter {
     let mut bytes = [0u8; 4];
     if getrandom::fill(&mut bytes).is_err() {
-        return 0.5;
+        return Jitter::from_ratio(1, 2);
     }
-    f64::from(u32::from_le_bytes(bytes)) / f64::from(u32::MAX)
+    Jitter::from_random_u32(u32::from_le_bytes(bytes))
 }
 
 #[cfg(test)]

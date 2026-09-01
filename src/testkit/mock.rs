@@ -214,7 +214,7 @@ impl MockCsmsBuilder {
         let csms = Csms::builder()
             .bind(addr)
             .versions(self.versions)
-            .authenticate(|_: Auth| async { AuthOutcome::Accept })
+            .authenticate(|_: Auth| async { AuthOutcome::accept() })
             .handler(SharedHandler(recording.clone()))
             // A test should fail on its own assertions, not on a keepalive.
             .ping_interval(None)

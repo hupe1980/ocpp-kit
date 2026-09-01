@@ -120,7 +120,7 @@ Part 4 §3.1.1 distinguishes them, and so does the CSMS here:
 
 | Outcome | HTTP | Meaning |
 |---|---|---|
-| `AuthOutcome::Accept` | 101 | in you go |
+| `AuthOutcome::Accept(_)` | 101 | in you go — the payload is what the authenticator resolved; see [`SessionContext`](@/docs/transport.md) |
 | `AuthOutcome::Reject` | **401** with `WWW-Authenticate` | the credentials are wrong |
 | `AuthOutcome::Unknown` | **404** | there is no such Charging Station |
 | no common subprotocol | 101 **without** the header, then an immediate close | we speak nothing in common |

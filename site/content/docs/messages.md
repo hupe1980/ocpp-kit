@@ -24,6 +24,40 @@ Required fields are constructor arguments; optional ones are `with_…` setters.
 converts into a `String` is accepted, and the fields are public, so `..Default::default()`
 works where every field is optional.
 
+## Numbers are exact decimals
+
+Every OCPP `number` — a meter register, a charging limit, a tariff price — is a
+[`types::Decimal`](https://docs.rs/ocpp-kit/latest/ocpp_kit/types/struct.Decimal.html): a
+signed mantissa and a decimal scale, never an `f64`.
+
+```rust
+use ocpp_kit::decimal;
+use ocpp_kit::types::Decimal;
+
+// The scale the meter wrote is part of what it said, and it survives the round trip.
+let register: Decimal = "2935.600".parse().unwrap();
+assert_eq!(register.scale(), 3);
+assert_eq!(register.to_string(), "2935.600");
+
+// A session's energy is a difference of two registers. In f64 this is 10.000000000000002.
+assert_eq!(decimal!(20.2) - decimal!(10.1), decimal!(10.1));
+```
+
+The reasons are the same three every time:
+
+* **Resolution is a claim.** A meter reporting `2935.600` kWh is stating three decimals of
+  accuracy. As an `f64`, `2935.600` and `2935.6` are the same value and the claim is gone.
+* **Energy is a subtraction.** OCPP *defines* a session's energy as the difference of two
+  register readings, and binary floating point does not subtract decimals exactly.
+* **The 2.1 Tariff and Cost block is money.**
+
+Literals are written with `decimal!(32.5)`, which parses the source text at compile time;
+integers convert with `From`. There is no `From<f64>`, deliberately — a number that has been
+through a float has already lost what this type exists to keep. The conversions are there when
+they are needed, named `to_f64_lossy` and `from_f64_lossy` so the signature says what it
+costs. `cargo xtask no-floats` fails the build if an `f32` or `f64` reaches any public
+signature in the crate, and CI runs it.
+
 ## Enumerations are open
 
 Field devices ship values that are not in the schema, and OCA adds values in errata. A

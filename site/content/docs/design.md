@@ -1,6 +1,6 @@
 +++
 title = "Design decisions"
-description = "Why one crate rather than five, why generated code is committed, why f64 for numbers and rustls only — and what this crate deliberately does not do."
+description = "Why one crate rather than five, why generated code is committed, why OCPP numbers are exact decimals and rustls only — and what this crate deliberately does not do."
 weight = 150
 +++
 
@@ -27,10 +27,15 @@ three roles, which would otherwise be three copies of the same state machine.
 **Separate type sets per version.** 26 of the 128 shared 2.0.1 schema files changed in 2.1.
 Sharing types between the versions would silently mis-validate 2.0.1.
 
-**`jiff` for time, `f64` for numbers.** `f64` is what the schemas say (`"type": "number"`), and
-every OCPP number is a sensor reading — watts, amperes, watt-hours. Money in the 2.1 Tariff
-block is the exception: work in the smallest currency unit and convert at the boundary. See
-[messages](@/docs/messages.md).
+**`jiff` for time, an exact decimal for numbers.** The schemas say `"type": "number"`, and the
+obvious reading of that is `f64`. It is the wrong one. An OCPP number is a meter register, a
+charging limit or a price, and all three are decimal quantities: `2935.600` kWh states three
+decimals of resolution that an `f64` cannot hold, a session's energy is *defined* as a
+difference of two registers and `10.1 - 0.1` is not `10.0` in binary, and the 2.1 Tariff block
+is money. So `types::Decimal` is a mantissa and a scale — exact, `Copy`, `no_std`, and
+round-tripping the token the station sent. `cargo xtask no-floats` keeps `f32` and `f64` out of
+every public signature, and CI runs it, so the guarantee is checkable from outside rather than
+merely intended. See [messages](@/docs/messages.md).
 
 **Validation separate from `serde`.** Running constraints inside `Deserialize` makes every
 failure an unstructured `serde` error. A second explicit pass is what makes the

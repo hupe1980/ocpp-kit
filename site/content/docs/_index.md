@@ -20,6 +20,7 @@ default features there is no async runtime, no TLS and no domain logic in your b
 | **3** | `transport` | Tokio and `rustls`, with an RFC 6455 WebSocket and RFC 7692 compression | – |
 | **4** | `station` · `csms` | Opt-in domain building blocks | partial |
 | — | `standard` | The catalogues that live outside the schemas | ✅ `alloc` |
+| — | `metering` | [Signed meter values](@/docs/metering.md): the record a customer may be billed for | ✅ `alloc` |
 
 ## Where to start
 
@@ -28,6 +29,8 @@ default features there is no async runtime, no TLS and no domain logic in your b
   2.1, and where each difference lives in the code.
 * **[Talking to real hardware](@/docs/interop.md)** — the leniency knobs, and why they cost
   nothing when unused.
+* **[Signed meter values](@/docs/metering.md)** — the record a customer may actually be
+  billed for, and the two shapes its public-key field is sent in.
 * **[Testing and conformance](@/docs/testing.md)** — how the crate knows it is right.
 * **[Design decisions](@/docs/design.md)** — the trade-offs behind the shape of it, and what
   it deliberately is not.

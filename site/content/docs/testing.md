@@ -73,7 +73,18 @@ of pseudo-random scenarios from a deterministic generator:
   recognises a repeat;
 * a gap is reported **exactly** when a sequence number is missing;
 * a composite schedule agrees with the stacking rules **evaluated directly**, and never
-  contains two consecutive steps with the same limit.
+  contains two consecutive steps with the same limit — compared exactly, not within a
+  tolerance, because the limits are exact decimals and a tolerance would hide a real defect.
+
+`tests/domain_events.rs` holds the version-agnostic model to the same standard: for every
+action of every version it generates a schema-valid request, runs it through the funnel, and
+asserts that it maps to a modelled event exactly when `COVERED_ACTIONS` says it does — 77
+station-originated actions, so an action the generator adds cannot go unmodelled unnoticed.
+
+`tests/schema_conformance.rs` adds one claim a value comparison cannot make: a JSON number goes
+back out spelled exactly as it arrived. `2935.600` is not `2935.6` — it is a meter stating
+three decimals of resolution — and the round trip through the typed layer preserves the token,
+not merely the value.
 
 ## The WebSocket layer — against a reference implementation
 

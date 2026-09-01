@@ -57,6 +57,13 @@ authentication failure that looks like a network problem.
 | Sequence numbers | none | `seqNo`, strictly increasing |
 | Transaction id | assigned by the **CSMS**, in `StartTransaction.conf` | assigned by the **station**, and unique across reboots (E01.FR.08) |
 | Start / stop | implementation-defined ("cable in and authorized", by convention) | `TxStartPoint` / `TxStopPoint`, each a set that behaves as a disjunction (E01, E06) |
+| Charging point | `connectorId`; there are no EVSEs | `evseId`, with an optional `connectorId` under it |
+| Charging state | only through `StatusNotification` | `transactionInfo.chargingState` |
+| Signed meter values | the 2.x object serialized into a `SignedData` sample's `value` **string** (OCA note §3.2.1) | `SampledValue.signedMeterValue`, typed |
+
+The last three are why the [version-agnostic model](@/docs/domain.md) reports a 1.6 connector
+as a connector rather than passing it off as an EVSE, and why reading a
+[signed meter value](@/docs/metering.md) is protocol knowledge rather than a field access.
 
 Both versions are **linear**, not exponential, and both apply only to transaction-related
 messages. `actions::is_transaction_related` is the single place that knows which those are.

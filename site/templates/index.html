@@ -99,6 +99,22 @@
       <code>FormationViolation</code>.</p>
     </article>
     <article class="card">
+      <h3>Numbers are exact</h3>
+      <p>Every OCPP <code>number</code> is a decimal mantissa and scale, never an
+      <code>f64</code>. A meter reporting <code>2935.600</code> kWh claims three decimals of
+      resolution, and it goes back out as <code>2935.600</code>; a session’s energy is the
+      exact difference of two registers.</p>
+      <a href="{{ get_url(path='@/docs/messages.md') }}">Typed messages →</a>
+    </article>
+    <article class="card">
+      <h3>The billable value</h3>
+      <p>Under calibration law a customer may only be billed for the record the <em>meter</em>
+      signed — which 1.6 hides inside a string and whose public-key field the specification and
+      its own example message disagree about. Both shapes are read, and the record is carried
+      verbatim.</p>
+      <a href="{{ get_url(path='@/docs/metering.md') }}">Signed meter values →</a>
+    </article>
+    <article class="card">
       <h3>The types cannot drift</h3>
       <p>Every action’s request and response is round-tripped through pseudo-random
       schema-valid payloads and validated back against the official schema — over 9 000 round

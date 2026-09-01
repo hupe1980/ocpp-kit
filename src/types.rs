@@ -8,7 +8,7 @@ use core::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use crate::validate::{Validate, ValidationPath, ViolationKind, Violations};
+use crate::validate::{Validate, ValidationPath, Violations};
 
 // ---------------------------------------------------------------------------
 // DateTime
@@ -177,91 +177,7 @@ impl std::error::Error for DateTimeError {}
 // Decimal
 // ---------------------------------------------------------------------------
 
-/// An OCPP `number`.
-///
-/// Backed by `f64`, because that is what the schemas say (`"type": "number"`) and every OCPP
-/// number is a sensor reading — watts, amperes, watt-hours, percentages.
-///
-/// Serialized in `serde_json`'s `float_roundtrip` mode, so the *value* survives exactly
-/// (`1.15` never drifts to `1.1499999999999999`) but the spelling does not: `1.10` comes back
-/// as `1.1`. Non-finite values are refused at serialization rather than becoming `null`.
-///
-/// Money is the exception, in the 2.1 Tariff and Cost block. Work in the smallest currency
-/// unit and call [`Decimal::get`] at the boundary, or carry your own decimal type.
-#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
-pub struct Decimal(f64);
-
-impl Decimal {
-    #[must_use]
-    /// Wraps a floating-point value.
-    pub const fn new(value: f64) -> Self {
-        Self(value)
-    }
-
-    #[must_use]
-    /// The underlying value.
-    pub const fn get(self) -> f64 {
-        self.0
-    }
-}
-
-impl From<f64> for Decimal {
-    fn from(value: f64) -> Self {
-        Self(value)
-    }
-}
-
-impl From<f32> for Decimal {
-    fn from(value: f32) -> Self {
-        Self(f64::from(value))
-    }
-}
-
-impl From<i32> for Decimal {
-    fn from(value: i32) -> Self {
-        Self(f64::from(value))
-    }
-}
-
-impl From<Decimal> for f64 {
-    fn from(value: Decimal) -> Self {
-        value.0
-    }
-}
-
-impl fmt::Display for Decimal {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl Serialize for Decimal {
-    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
-        if self.0.is_finite() {
-            ser.serialize_f64(self.0)
-        } else {
-            Err(serde::ser::Error::custom("OCPP numbers must be finite"))
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for Decimal {
-    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
-        f64::deserialize(de).map(Self)
-    }
-}
-
-impl Validate for Decimal {
-    fn validate_at(&self, path: &mut ValidationPath, out: &mut Violations) {
-        if !self.0.is_finite() {
-            out.push(
-                path,
-                ViolationKind::Type,
-                "value is not a finite JSON number",
-            );
-        }
-    }
-}
+pub use crate::decimal::{Decimal, ParseDecimalError};
 
 // ---------------------------------------------------------------------------
 // CustomData

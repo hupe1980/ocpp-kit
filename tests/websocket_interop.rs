@@ -13,7 +13,6 @@
 //!
 //! `tokio-tungstenite` is a **dev-dependency only**. It is the reference, never the runtime.
 
-#![cfg(feature = "tokio")]
 // The reference implementation's handshake error type is large; that is its business.
 #![allow(clippy::result_large_err)]
 
@@ -73,7 +72,7 @@ async fn start_csms() -> (u16, ocpp_kit::transport::CsmsHandle) {
     let csms = Csms::builder()
         .bind(listener.local_addr().unwrap())
         .versions([Version::V2_1, Version::V2_0_1, Version::V1_6])
-        .authenticate(|_: Auth| async { AuthOutcome::Accept })
+        .authenticate(|_: Auth| async { AuthOutcome::accept() })
         .handler(Accepting)
         .ping_interval(None)
         .build()

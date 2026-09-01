@@ -8,11 +8,12 @@
 //! category — which is exactly what the OCPP error codes are keyed on
 //! (see [`crate::rpc::ErrorCode`]).
 
-use alloc::borrow::ToOwned;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt;
+
+use crate::decimal::Decimal;
 
 /// One step of a JSON pointer into a payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -297,31 +298,43 @@ pub fn string(
 /// `minimum` / `maximum` for integers.
 pub fn int_range(
     value: i64,
-    min: Option<f64>,
-    max: Option<f64>,
+    min: Option<i64>,
+    max: Option<i64>,
     path: &ValidationPath,
     out: &mut Violations,
 ) {
-    #[allow(clippy::cast_precision_loss)]
-    range(value as f64, min, max, path, out);
+    if let Some(min) = min {
+        if value < min {
+            out.push(
+                path,
+                ViolationKind::Property,
+                format!("minimum {min} violated (got {value})"),
+            );
+        }
+    }
+    if let Some(max) = max {
+        if value > max {
+            out.push(
+                path,
+                ViolationKind::Property,
+                format!("maximum {max} violated (got {value})"),
+            );
+        }
+    }
 }
 
-/// `minimum` / `maximum` for numbers, and the JSON-representability of the value.
+/// `minimum` / `maximum` for numbers.
+///
+/// The bounds are [`Decimal`]s, not `f64`s, so the comparison is the exact one the schema
+/// wrote: a `maximum` of `100` rejects `100.000000000000001` rather than the value it happens
+/// to round to.
 pub fn range(
-    value: f64,
-    min: Option<f64>,
-    max: Option<f64>,
+    value: Decimal,
+    min: Option<Decimal>,
+    max: Option<Decimal>,
     path: &ValidationPath,
     out: &mut Violations,
 ) {
-    if !value.is_finite() {
-        out.push(
-            path,
-            ViolationKind::Type,
-            "value is not a finite JSON number".to_owned(),
-        );
-        return;
-    }
     if let Some(min) = min {
         if value < min {
             out.push(

@@ -233,6 +233,7 @@ reordering the list.
 Smart charging is the one part of OCPP that hands you a *calculation*.
 
 ```rust
+use ocpp_kit::decimal;
 use ocpp_kit::station::smart_charging::{
     Period, ProfileKind, ProfileStore, Purpose, RateUnit, Schedule, Profile,
 };
@@ -242,15 +243,19 @@ let start = DateTime::parse("2024-01-01T00:00:00Z").unwrap();
 let mut store = ProfileStore::new();
 
 store.install(Profile::new(1, 0, Purpose::TxDefaultProfile, ProfileKind::Absolute,
-    Schedule::new(1, RateUnit::A, vec![Period::new(0, 32.0)]).starting(start)));
+    Schedule::new(1, RateUnit::A, vec![Period::new(0, decimal!(32))]).starting(start)));
 store.install(Profile::new(2, 0, Purpose::ChargingStationMaxProfile, ProfileKind::Absolute,
-    Schedule::new(1, RateUnit::A, vec![Period::new(0, 20.0), Period::new(1800, 40.0)]).starting(start)));
+    Schedule::new(1, RateUnit::A, vec![Period::new(0, decimal!(20)), Period::new(1800, decimal!(40))]).starting(start)));
 
 let composite = store.composite(1, start, 3600, RateUnit::A, None);
 // First the station ceiling binds, then the session profile does.
-assert_eq!(composite.periods[0].limit, Some(20.0));
-assert_eq!(composite.periods[1].limit, Some(32.0));
+assert_eq!(composite.periods[0].limit, Some(decimal!(20)));
+assert_eq!(composite.periods[1].limit, Some(decimal!(32)));
 ```
+
+Limits are exact decimals, so two steps merge when they say the *same* number rather than
+when they are within an epsilon of each other, and an ampere-to-watt conversion is a decimal
+multiplication — 16 A at 230 V on three phases is 11040 W, not 11039.999999999998.
 
 A step's `limit` is an `Option`, and `None` marks a stretch that *no* installed profile
 constrains — carrying the previous step's number through would report a limit nobody
@@ -302,6 +307,62 @@ It also detects gaps — an offline period whose queue overflowed shows up as
 `AppliedWithGap { missing }` — and folds 1.6's `StartTransaction` / `MeterValues` /
 `StopTransaction` into the same model through `ingest_unsequenced`.
 
+### The energy figures
+
+`Record::energy_wh()` is the difference of the station's start and stop registers, computed
+exactly:
+
+```rust
+use ocpp_kit::csms::ledger::{EventKind, Ledger, TransactionEvent};
+use ocpp_kit::decimal;
+use ocpp_kit::types::{DateTime, Identity};
+
+let station = Identity::new("CS-0001").unwrap();
+let at = |text: &str| DateTime::parse(text).unwrap();
+let mut ledger = Ledger::new();
+
+ledger.ingest(
+    &TransactionEvent::new(station.clone(), "tx-1", 0, EventKind::Started, at("2024-01-01T00:00:00Z"))
+        .with_meter(decimal!(2935.600)),
+);
+ledger.ingest(
+    &TransactionEvent::new(station.clone(), "tx-1", 1, EventKind::Ended, at("2024-01-01T01:00:00Z"))
+        .with_meter(decimal!(2952.100)),
+);
+
+let record = ledger.transaction(&station, "tx-1").unwrap();
+assert_eq!(record.energy_wh().unwrap().to_string(), "16.500");
+```
+
+Both registers are [exact decimals](@/docs/messages.md), so the subtraction is exact and the
+meter's resolution survives it. Unit conversion is exact too: a `kWh` reading and a 2.x
+`unitOfMeasure.multiplier` are applied by moving the decimal point, never by multiplying by
+`1000.0`.
+
+Exact is not the same as authoritative. The figure is what the *station* said, and the
+registers may not even be the quantity you want: in the OCA's own example message a 1.6
+`meterStop` is the meter's **lifetime** total while the signed record beside it reports the
+session. Where calibration law requires the billable kWh to be traceable to the meter, that
+signed record is the basis — carried through untouched as `Record::signed`. See
+[signed meter values](@/docs/metering.md).
+
+```rust,no_run
+# use ocpp_kit::csms::ledger::Record;
+# fn example(record: &Record) {
+for reading in record.signed_with_context("Transaction.End") {
+    let _ = &reading.value.signed_meter_data;      // verbatim, for your own verification
+}
+# }
+```
+
+`Record::signed` is one list rather than a start and a stop because 1.6 does not give the two
+their own messages: a `StartTransaction` has nowhere to carry a signed record, so both records
+arrive in `StopTransaction.transactionData`.
+
+`Record` also keeps `evse_id` / `connector_id` from the first event that named one, since only
+some messages do. It keeps no `charging_state`: occupancy billing needs the *series* of states
+over the session, and a scalar would be the wrong shape for it.
+
 ### Version-agnostic events
 
 A CSMS that supports three versions does not want three copies of its business logic.
@@ -320,5 +381,65 @@ let b = observe_v21(modern);
 
 The model is **deliberately lossy** — it keeps what almost every CSMS needs and drops the rest
 — which is why every conversion also reports which version produced it, so you can reach for
-the typed original whenever the detail matters. `to_ledger_event` bridges straight into the
-ledger.
+the typed original whenever the detail matters. `COVERED_ACTIONS` lists what it models.
+
+Each transaction event carries what a CDR needs and a meter reading cannot supply: the
+`charging_state` the station reports, and the `evse_id` / `connector_id` the session is at.
+
+```rust,no_run
+# use ocpp_kit::csms::events::DomainEvent;
+# fn example(event: &DomainEvent) {
+if let DomainEvent::TransactionUpdated { charging_state, evse_id, .. } = event {
+    // A register sitting at 0.000 kWh is a taper if the station says `Charging` and an
+    // occupancy fee if it says `SuspendedEV`. No amount of metering data settles which.
+    let _ = (charging_state.as_deref(), evse_id);
+}
+# }
+```
+
+1.6 has connectors and no EVSEs, and the model says so rather than passing one off as the
+other: `StartTransaction.connectorId` fills `connector_id` and leaves `evse_id` empty. A CSMS
+addressing a 2.x-shaped inventory with a 1.6 connector number would aim at the wrong outlet.
+
+### Into the ledger
+
+`to_ledger_event` is the only bridge, so a CSMS supporting 1.6 and 2.x writes one adapter
+rather than two. Three 1.6 asymmetries live behind it:
+
+* It has no transaction-event message, so a mid-transaction reading arrives as `MeterValues`
+  naming a `transactionId`. That folds into an `Updated` event, which is what makes
+  `StartTransaction` / `MeterValues` / `StopTransaction` genuinely one shape. A 2.x
+  `MeterValues` names no transaction and stays out, because it is not part of one.
+* It hands the transaction id back in `StartTransaction.conf`, so a start event carries none
+  and `to_ledger_event` returns `None`. `to_ledger_event_with_id` takes the id the handler
+  assigned. Skipping it loses the *start register*, and the first periodic `MeterValues`
+  quietly takes its place — billing the session from a reading taken minutes after charging
+  began.
+* Where an event carries several readings, which one it means depends on which end of the
+  transaction it is: an `Ended` event prefers the `Transaction.End` sample and falls back to
+  the last, a `Started` event prefers `Transaction.Begin` and falls back to the first.
+
+### Warnings
+
+Most of what the model drops is detail a CSMS does not need. Some of it is not:
+
+```rust,no_run
+# use ocpp_kit::csms::events::Observed;
+# fn example(observed: &Observed) {
+for warning in &observed.warnings {
+    // "unreadable signed data: not a SignedMeterValue document: expected value at line 1 …"
+    eprintln!("{warning}");
+}
+# }
+```
+
+`WarningKind` covers unreadable signed data, an unreadable 1.6 reading, an energy register in
+a unit that is not an energy unit, and one out of range. Each is a station saying something
+malformed about a value that decides money, and each otherwise fails silently: a station that
+*claims* to send signed meter data and sends something unparseable looks, through the funnel
+alone, exactly like one sending none.
+
+No schema catches them. 1.6 types a sampled value as a plain `string` with no numeric
+constraint, so `"L"` is a *conforming* reading; 2.x puts no bound on
+`unitOfMeasure.multiplier`, so `10¹⁰⁹` conforms too. Both are schema-valid messages no CSMS
+can bill, which is why the funnel reports them and the validator cannot.

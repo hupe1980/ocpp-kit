@@ -273,7 +273,20 @@ fn validate_inner(expr: &str, by_ref: bool, t: &Typed, depth: usize) -> String {
     let amp = if by_ref { "" } else { "&" };
     let c = &t.c;
     let opt = |v: Option<u32>| v.map_or("None".to_string(), |n| format!("Some({n})"));
-    let optf = |v: Option<f64>| v.map_or("None".to_string(), |n| format!("Some({n:?})"));
+    // Schema bounds are exact decimals in the JSON; they are emitted as exact `Decimal`
+    // constants rather than as `f64` literals, so the generated comparison is the one the
+    // schema wrote.
+    let opti = |v: Option<f64>| {
+        v.map_or("None".to_string(), |n| {
+            format!("Some({})", crate::model::decimal_literal(n).0)
+        })
+    };
+    let optd = |v: Option<f64>| {
+        v.map_or("None".to_string(), |n| {
+            let (mantissa, scale) = crate::model::decimal_literal(n);
+            format!("Some(crate::types::Decimal::new({mantissa}, {scale}))")
+        })
+    };
     match &t.ty {
         Ty::Str => {
             if c.max_length.is_none() && c.min_length.is_none() {
@@ -292,8 +305,8 @@ fn validate_inner(expr: &str, by_ref: bool, t: &Typed, depth: usize) -> String {
             } else {
                 format!(
                     "{ind}validate::int_range(i64::from({deref}{expr}), {}, {}, path, out);\n",
-                    optf(c.minimum),
-                    optf(c.maximum)
+                    opti(c.minimum),
+                    opti(c.maximum)
                 )
             }
         }
@@ -302,9 +315,9 @@ fn validate_inner(expr: &str, by_ref: bool, t: &Typed, depth: usize) -> String {
                 String::new()
             } else {
                 format!(
-                    "{ind}validate::range({expr}.get(), {}, {}, path, out);\n",
-                    optf(c.minimum),
-                    optf(c.maximum)
+                    "{ind}validate::range({deref}{expr}, {}, {}, path, out);\n",
+                    optd(c.minimum),
+                    optd(c.maximum)
                 )
             }
         }
