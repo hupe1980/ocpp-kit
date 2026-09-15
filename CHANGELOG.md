@@ -41,6 +41,16 @@ the action name anywhere in the test sources, so a sentence in a doc comment cou
 coverage. It now requires evidence that a test drives the action — a typed payload or the action
 name on the wire — and prints which.
 
+### Security
+
+**`rustls` 0.23.45 and `wnaf` 0.14.1** in `Cargo.lock`. RUSTSEC-2026-0285: rustls accepted TLS
+1.3 handshake messages sent at the wrong encryption level when they followed a key-changing
+message in the same record, against RFC 8446 §5.1. The transcript stays authenticated, so it is
+not a handshake-forgery bug, but a peer could send in plaintext what should have been encrypted.
+`wnaf` 0.14.0 was yanked. Neither affects a consumer resolving its own dependencies — the
+`tokio-rustls = "0.26"` requirement already admits the fix — but it affects
+`cargo install --locked` and anyone building from this lock file.
+
 ### Fixed
 
 **`FileStore` assumed a single writer.** Two processes on one journal silently interleaved
