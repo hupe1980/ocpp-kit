@@ -26,3 +26,6 @@ site/public/
 # Downloaded specifications (not redistributable)
 specs/
 .DS_Store
+
+# Internal architecture concepts (not published)
+concepts/

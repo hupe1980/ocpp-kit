@@ -1235,7 +1235,7 @@ mod tests {
 
         let event = to_ledger_event_with_id(&identity, &observed, "42").expect("a start event");
         let mut ledger = super::super::ledger::Ledger::new();
-        ledger.ingest_unsequenced(&event);
+        let _ = ledger.ingest_unsequenced(&event);
 
         let stop = v1_6::StopTransactionRequest::new(
             2_952_100,
@@ -1243,7 +1243,8 @@ mod tests {
             42,
         );
         let observed = observe_v16(&v1_6::CsRequest::StopTransaction(stop));
-        ledger.ingest_unsequenced(&to_ledger_event(&identity, &observed).expect("a stop event"));
+        let _ = ledger
+            .ingest_unsequenced(&to_ledger_event(&identity, &observed).expect("a stop event"));
 
         let record = ledger.transaction(&identity, "42").unwrap();
         assert_eq!(record.energy_wh().unwrap().to_string(), "16500");
@@ -1267,7 +1268,8 @@ mod tests {
                 DateTime::parse("2024-01-01T00:00:00Z").unwrap(),
             ),
         ));
-        ledger.ingest_unsequenced(&to_ledger_event_with_id(&identity, &start, "42").unwrap());
+        let _ =
+            ledger.ingest_unsequenced(&to_ledger_event_with_id(&identity, &start, "42").unwrap());
 
         let periodic = observe_v16(&v1_6::CsRequest::MeterValues(
             v1_6::MeterValuesRequest::new(
@@ -1284,7 +1286,7 @@ mod tests {
         ));
         let event = to_ledger_event(&identity, &periodic).expect("a mid-transaction reading");
         assert_eq!(event.kind, super::super::ledger::EventKind::Updated);
-        ledger.ingest_unsequenced(&event);
+        let _ = ledger.ingest_unsequenced(&event);
 
         let record = ledger.transaction(&identity, "42").unwrap();
         assert_eq!(record.events(), 2);
@@ -1441,7 +1443,8 @@ mod tests {
         // …and the point reaches the ledger, from whichever message named it.
         let identity = crate::types::Identity::new("CS-0001").unwrap();
         let mut ledger = super::super::ledger::Ledger::new();
-        ledger.ingest_unsequenced(&to_ledger_event_with_id(&identity, &start, "42").unwrap());
+        let _ =
+            ledger.ingest_unsequenced(&to_ledger_event_with_id(&identity, &start, "42").unwrap());
         let record = ledger.transaction(&identity, "42").unwrap();
         assert_eq!(record.connector_id, Some(2));
         assert_eq!(record.evse_id, None);
@@ -1482,7 +1485,7 @@ mod tests {
         let observed = observe_v16(&v1_6::CsRequest::StopTransaction(stop));
         let event = to_ledger_event(&identity, &observed).expect("a stop event");
         let mut ledger = super::super::ledger::Ledger::new();
-        ledger.ingest_unsequenced(&event);
+        let _ = ledger.ingest_unsequenced(&event);
         let record = ledger.transaction(&identity, "42").unwrap();
 
         // 1.6 has no start message to carry a signed record, so both arrive here.
@@ -1563,7 +1566,7 @@ mod tests {
         let observed = observe_v21(&v2_1::CsRequest::TransactionEvent(request));
         let event = to_ledger_event(&identity, &observed).expect("transaction event");
         let mut ledger = super::super::ledger::Ledger::new();
-        ledger.ingest(&event);
+        let _ = ledger.ingest(&event);
         let record = ledger.transaction(&identity, "tx-1").unwrap();
         let signed = record
             .signed_with_context("Transaction.End")

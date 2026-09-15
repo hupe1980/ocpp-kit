@@ -59,6 +59,7 @@ pub enum Direction {
 /// What the Local Controller should do with a frame.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
+#[must_use = "discarding the decision forwards the frame, which is the opposite of `Reject`"]
 pub enum RelayDecision {
     /// Forward the original bytes untouched. Signed messages depend on this.
     Forward,

@@ -88,9 +88,16 @@ let engine = Engine::with_store(EngineConfig::new(Role::ChargingStation, Version
 ```
 
 A crash mid-append leaves a partial final line, discarded on the next open: it described a
-message that was never reported as queued. Not concurrent, and no defence against a corrupt
-filesystem — for a station whose state already lives in SQLite, implement the trait against
-that instead. It is four synchronous methods.
+message that was never reported as queued.
+
+One process, one file — checked, not assumed. A single writer's sequence numbers only move
+forward, so a duplicate on replay proves two processes have had the journal open, and `open`
+refuses it and says so rather than guessing whose queue is real. Not a lock file: a stale one
+would refuse to start a station that had just lost power, which is when its queue needs
+replaying.
+
+No defence against a corrupt filesystem. For a station whose state already lives in SQLite,
+implement the trait against that instead — it is four synchronous methods.
 
 **A `MessageId` is answered once.** Part 4 §4.2.3 names "an existing message with the same
 unique identifier is being handled already" as a `CALLERROR` condition, and it is right to: two

@@ -65,11 +65,11 @@ records — begin *and* end — arrive together in `StopTransaction.transactionD
 
 `signedMeterData` is specified as Base64 (2.0.1 Part 2 §2.46), and plenty of stations send
 the record in plain instead. Refusing those is a quiet failure — the station keeps sending and
-its sessions stop being billable — so both shapes are read. They cannot collide: an OCMF
-record announces itself with `OCMF|`, and `|` is not in the Base64 alphabet.
+its sessions stop being billable — so both shapes are read, and
+[which one arrived is reported](#which-encoding-arrived-is-reported-not-absorbed).
 
 ```rust
-use ocpp_kit::metering::SignedMeterValue;
+use ocpp_kit::metering::{RecordEncoding, SignedMeterValue};
 
 const RECORD: &str = "OCMF|{\"FV\":\"1.0\"}|{\"SD\":\"3044\"}";
 
@@ -85,6 +85,29 @@ assert_eq!(plain.decoded_str().unwrap(), RECORD);
 `decoded()` returns the bytes for a binary format; `decoded_str()` returns text, which is what
 OCMF and EDL both are. Nothing is re-encoded on the way out — these are the bytes the
 signature covers.
+
+### Which encoding arrived is reported, not absorbed
+
+Only one of the two is conforming, and the party that has to argue with a vendor about it is the
+one billing from the record. So `record()` returns the encoding alongside the bytes — the same
+contract `decode_public_key` has, for the same reason:
+
+```rust
+use ocpp_kit::metering::{RecordEncoding, SignedMeterValue};
+
+const RECORD: &str = "OCMF|{\"FV\":\"1.0\"}|{\"SD\":\"3044\"}";
+
+let record = SignedMeterValue::new(RECORD).record().unwrap();
+assert_eq!(record.encoding, RecordEncoding::Plain);
+assert!(!record.encoding.is_conforming());   // 2.0.1 Part 2 §2.46 says Base64
+assert_eq!(record.as_text().unwrap(), RECORD);
+```
+
+`decoded()` is shorthand for `record().bytes` and delegates to it, so the two cannot disagree.
+
+They are told apart by alphabet: OCMF begins `OCMF|`, EDL is XML beginning `<`, and neither
+character is in the Base64 alphabet. Text made *only* of Base64 characters is taken as Base64 —
+the one ambiguous case, unreachable for either format OCPP names here.
 
 ## Both versions reach the same funnel
 

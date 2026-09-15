@@ -119,30 +119,35 @@ Four `cargo fuzz` targets, over the parsers that face hostile input:
 
 ## Certification profiles
 
-`cargo xtask coverage --profile core` answers "how much of the Core certification profile do
-the scenario tests actually drive?", from the OCPP 2.0.1 Part 5 table:
+`tests/scenarios.rs` drives every action OCPP 2.0.1 Part 5 names — all 76, across all eight
+profiles — as a real exchange over loopback TCP, asserting the typed response on both sides.
+The schema round trips prove the *types* match the schemas; this proves the action dispatches,
+reaches a handler, and comes back as the right type.
 
 ```console
-$ cargo xtask coverage --profile core
-Core (OCPP 2.0.1 Part 5)
+$ cargo xtask coverage --profile all
+Certification profiles (OCPP 2.0.1 Part 5)
 
-  [x] BootNotification
-  [x] Heartbeat
-  [ ] GetBaseReport
-  …
-  11/34 action(s) named in a scenario test
+  [x] Core                           34/34
+  [x] Advanced Security              3/3
+  [x] Local Authorization List Management 3/3
+  [x] Smart Charging                 8/8
+  [x] Advanced Device Management     8/8
+  [x] Advanced User Interface        5/5
+  [x] Reservation                    3/3
+  [x] ISO 15118 support              12/12
 
-  mandatory controller components (Part 5 §5):
-    [x] OCPPCommCtrlr
-    [x] TxCtrlr
-    …
+  76/76 action(s) driven by a scenario test
 ```
 
-It is a coverage *signal*, not a certification — certification is a test-lab activity against
-the OCA test tool (OCTT), which needs the tool, a licence and a running system. What this crate
-provides is the traceability that makes it tractable: every action carries its functional
-block, `cargo xtask coverage` reports which requirement ids the source and tests cite, and the
-engine's rules are individually testable.
+An action counts only when a test names its typed payload or puts it on the wire; comments are
+stripped first, so a sentence mentioning an action is not coverage.
+
+It is still a coverage *signal*, not a certification — that is a test-lab activity against the
+OCA test tool (OCTT), which needs the tool, a licence and a running system. What this crate
+provides is the traceability that makes it tractable: every action carries its functional block,
+`cargo xtask coverage` reports which requirement ids the source and tests cite, and the engine's
+rules are individually testable.
 
 ## Testing *your* code — the `testkit` feature
 

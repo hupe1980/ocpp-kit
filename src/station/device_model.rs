@@ -447,6 +447,8 @@ pub enum GetStatus {
 /// The result of a `SetVariables` entry (`SetVariableStatusEnumType`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
+#[must_use = "a rejected write left the variable unchanged; the CSMS has to be told which \
+              status it got, not `Accepted`"]
 pub enum SetStatus {
     /// Stored and in effect.
     Accepted,

@@ -153,8 +153,29 @@ impl TransactionEvent {
 }
 
 /// What the ledger did with an event.
+///
+/// # Acting on it
+///
+/// This is the whole output of the ledger: the record it keeps is derived from these verdicts,
+/// and only the caller can act on one. `Duplicate` and `AfterEnd` both mean *this message has
+/// already been accounted for* — a station that lost the answer to its `StopTransaction` sends
+/// it again, and OCPP requires it to. Billing the second copy settles a second record out of one
+/// message, which on 1.6 produces a session that begins and ends at the same instant.
+///
+/// `AppliedWithGap` is not a refusal: the event is recorded, and `missing` names the `seqNo`s
+/// that never arrived. A consumer that discards it bills a transaction with a hole in it.
+///
+/// The enum is `#[non_exhaustive]`, so a consumer has to decide what an unrecognised verdict
+/// means rather than matching its way out of the question. Both directions cost something and
+/// the right one depends on what is downstream: treating it as a refusal risks dropping energy
+/// that was really delivered, and treating it as a fresh delivery risks a double-settlement
+/// unless something further on deduplicates. `Applied`, `AppliedWithGap`, `Duplicate` and
+/// `AfterEnd` keep the meanings documented here.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
+#[must_use = "the ledger's verdict decides whether this message may be billed: `Duplicate` is a \
+              retry of a message already accounted for, `AfterEnd` arrived after the transaction \
+              closed, and `AppliedWithGap` names events that never arrived"]
 pub enum Ingested {
     /// Recorded.
     Applied,
@@ -487,7 +508,7 @@ mod tests {
     #[test]
     fn a_gap_is_reported_and_closes_when_the_missing_event_arrives() {
         let mut ledger = Ledger::new();
-        ledger.ingest(&event(0, EventKind::Started));
+        let _ = ledger.ingest(&event(0, EventKind::Started));
         assert_eq!(
             ledger.ingest(&event(3, EventKind::Updated)),
             Ingested::AppliedWithGap {
@@ -496,7 +517,7 @@ mod tests {
         );
         assert_eq!(ledger.incomplete().count(), 1);
 
-        ledger.ingest(&event(1, EventKind::Updated));
+        let _ = ledger.ingest(&event(1, EventKind::Updated));
         assert_eq!(
             ledger.ingest(&event(2, EventKind::Updated)),
             Ingested::Applied,
@@ -508,19 +529,19 @@ mod tests {
     #[test]
     fn a_transaction_records_its_energy_and_its_reason() {
         let mut ledger = Ledger::new();
-        ledger.ingest(
+        let _ = ledger.ingest(
             &event(0, EventKind::Started)
                 .with_meter(decimal!(1000.0))
                 .with_id_token("CARD-1"),
         );
-        ledger.ingest(
+        let _ = ledger.ingest(
             &event(1, EventKind::Updated)
                 .with_meter(decimal!(4500.0))
                 .offline(),
         );
         let mut ended = event(2, EventKind::Ended).with_meter(decimal!(7300.0));
         ended.stopped_reason = Some("EVDisconnected".into());
-        ledger.ingest(&ended);
+        let _ = ledger.ingest(&ended);
 
         let record = ledger.transaction(&station(), "tx-1").unwrap();
         assert!(!record.is_open());
@@ -534,8 +555,8 @@ mod tests {
     #[test]
     fn an_event_after_the_end_is_flagged_but_not_lost() {
         let mut ledger = Ledger::new();
-        ledger.ingest(&event(0, EventKind::Started));
-        ledger.ingest(&event(1, EventKind::Ended));
+        let _ = ledger.ingest(&event(0, EventKind::Started));
+        let _ = ledger.ingest(&event(1, EventKind::Ended));
         assert_eq!(
             ledger.ingest(&event(2, EventKind::Updated)),
             Ingested::AfterEnd
@@ -574,20 +595,20 @@ mod tests {
         let mut ledger = Ledger::new();
 
         // The periodic meter value overtakes the transaction's own start.
-        ledger.ingest(
+        let _ = ledger.ingest(
             &TransactionEvent::new(station(), "tx-1", 1, EventKind::Updated, at(60))
                 .with_meter(decimal!(2100.0)),
         );
-        ledger.ingest(
+        let _ = ledger.ingest(
             &TransactionEvent::new(station(), "tx-1", 0, EventKind::Started, at(0))
                 .with_meter(decimal!(1000.0)),
         );
-        ledger.ingest(
+        let _ = ledger.ingest(
             &TransactionEvent::new(station(), "tx-1", 2, EventKind::Ended, at(120))
                 .with_meter(decimal!(3400.0)),
         );
         // And one more straggler lands after the transaction has already ended.
-        ledger.ingest(
+        let _ = ledger.ingest(
             &TransactionEvent::new(station(), "tx-1", 3, EventKind::Updated, at(90))
                 .with_meter(decimal!(2800.0)),
         );
@@ -629,11 +650,11 @@ mod tests {
     #[test]
     fn pruning_keeps_open_transactions() {
         let mut ledger = Ledger::new();
-        ledger.ingest(&event(0, EventKind::Started));
-        ledger.ingest(&event(1, EventKind::Ended));
+        let _ = ledger.ingest(&event(0, EventKind::Started));
+        let _ = ledger.ingest(&event(1, EventKind::Ended));
         let mut other = event(0, EventKind::Started);
         other.transaction_id = "tx-2".into();
-        ledger.ingest(&other);
+        let _ = ledger.ingest(&other);
 
         assert_eq!(ledger.prune_ended_before(at(1000)), 1);
         assert_eq!(ledger.len(), 1);

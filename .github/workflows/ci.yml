@@ -57,6 +57,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # Fails if src/v1_6, src/v2_0_1 or src/v2_1 differ from what the schemas produce.
       - run: cargo xtask codegen --check
+      # Fails if a schema update changed how much 2.0.1 and 2.1 differ, because the
+      # documentation quotes that number and nothing else would notice it going stale.
+      - run: cargo xtask schema-diff --check
 
   test:
     name: test (${{ matrix.os }}, ${{ matrix.rust }})

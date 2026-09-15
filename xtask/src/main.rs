@@ -3,6 +3,7 @@
 //! ```text
 //! cargo xtask codegen [--check]   regenerate src/v1_6, src/v2_0_1, src/v2_1 from schemas/
 //! cargo xtask schema-report       action / type counts per version
+//! cargo xtask schema-diff [--check]  what actually differs between 2.0.1 and 2.1
 //! cargo xtask coverage [--block B] requirement-ID coverage from the test suite
 //! cargo xtask doctest-site       compile and run every Rust snippet on the website and in
 //!                                the README
@@ -20,6 +21,7 @@ mod naming;
 mod profiles;
 mod registry;
 mod schema;
+mod schema_diff;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -38,6 +40,7 @@ fn main() -> Result<()> {
         "codegen" => codegen(flags.contains("--check")),
         "appendix" => appendix_codegen(flags.contains("--check")),
         "schema-report" => schema_report(),
+        "schema-diff" => schema_diff::run(&root().join("schemas"), flags.contains("--check")),
         "coverage" => coverage(&args[1..]),
         "doctest-site" => doctest_site(),
         "no-floats" => floats::run(),
@@ -46,8 +49,8 @@ fn main() -> Result<()> {
             println!("{}", env!("CARGO_PKG_NAME"));
             println!(
                 "usage: cargo xtask <codegen [--check] | appendix [--check] | schema-report \
-                        | coverage [--block <B>] [--profile <NAME>] | doctest-site \
-                        | no-floats | ci [--all]>"
+                        | schema-diff [--check] | coverage [--block <B>] [--profile <NAME>] \
+                        | doctest-site | no-floats | ci [--all]>"
             );
             Ok(())
         }
@@ -302,22 +305,33 @@ fn schema_report() -> Result<()> {
         for m in &model.messages {
             *by_block.entry(m.block).or_default() += 1;
         }
+        let from_cs = model.messages.iter().filter(|m| m.origin.from_cs()).count();
+        let from_csms = model
+            .messages
+            .iter()
+            .filter(|m| m.origin.from_csms())
+            .count();
+        let both = model
+            .messages
+            .iter()
+            .filter(|m| m.origin.from_cs() && m.origin.from_csms())
+            .count();
+        let sends = model
+            .messages
+            .iter()
+            .filter(|m| m.kind == registry::Kind::Send)
+            .count();
         println!("\n=== {} ===", version.label());
-        println!(
-            "actions: {}  (CS→CSMS {}, CSMS→CS {}, SEND {})",
-            model.messages.len(),
-            model.messages.iter().filter(|m| m.origin.from_cs()).count(),
-            model
-                .messages
-                .iter()
-                .filter(|m| m.origin.from_csms())
-                .count(),
-            model
-                .messages
-                .iter()
-                .filter(|m| m.kind == registry::Kind::Send)
-                .count(),
-        );
+        // The columns overlap on purpose and so do not sum to the total: `DataTransfer` is
+        // originated by either peer and is counted under both, and a SEND is also counted
+        // under the direction it travels. Printing the overlap is cheaper than printing
+        // three numbers that visibly do not add up.
+        println!("actions: {}", model.messages.len());
+        print!("  CS→CSMS {from_cs}, CSMS→CS {from_csms}");
+        if both > 0 {
+            print!(" (of which {both} either-way)");
+        }
+        println!(", SEND {sends}");
         println!(
             "enums: {}  shared types: {}",
             model.enums.len(),
@@ -346,6 +360,9 @@ fn coverage(args: &[String]) -> Result<()> {
         .map(String::as_str);
 
     if let Some(profile) = profile {
+        if profile == "all" {
+            return all_profiles();
+        }
         return profile_coverage(profile);
     }
 
@@ -410,11 +427,50 @@ fn coverage(args: &[String]) -> Result<()> {
 /// "Exercised" means the action's name appears in `tests/` — which is a coverage *signal*,
 /// not a certification. Certification is a test-lab activity against the OCA test tool; this
 /// is the question you can answer in CI on the way there.
+/// One line per certification profile — the summary worth quoting.
+fn all_profiles() -> Result<()> {
+    let root = root();
+    let mut corpus = String::new();
+    visit(&root.join("tests"), &mut |path| {
+        if path.extension().is_some_and(|e| e == "rs") {
+            corpus.push_str(&strip_comments(&std::fs::read_to_string(path)?));
+        }
+        Ok(())
+    })?;
+
+    println!("Certification profiles (OCPP 2.0.1 Part 5)\n");
+    let (mut total, mut total_covered) = (0, 0);
+    for profile in profiles::PROFILES {
+        let covered = profile
+            .actions
+            .iter()
+            .filter(|action| drives(&corpus, action).is_some())
+            .count();
+        total += profile.actions.len();
+        total_covered += covered;
+        let mark = if covered == profile.actions.len() {
+            "x"
+        } else {
+            " "
+        };
+        println!(
+            "  [{mark}] {:<30} {covered}/{}",
+            profile.name,
+            profile.actions.len()
+        );
+    }
+    println!("\n  {total_covered}/{total} action(s) driven by a scenario test");
+    println!(
+        "  (a coverage signal, not a certification: that is a test-lab activity against the\n            OCA test tool. See concepts/QUALITY.md.)"
+    );
+    Ok(())
+}
+
 fn profile_coverage(name: &str) -> Result<()> {
     let Some(profile) = profiles::find(name) else {
         let names: Vec<&str> = profiles::PROFILES.iter().map(|p| p.slug).collect();
         bail!(
-            "unknown certification profile {name:?}; try one of: {}",
+            "unknown certification profile {name:?}; try `all`, or one of: {}",
             names.join(", ")
         );
     };
@@ -423,7 +479,7 @@ fn profile_coverage(name: &str) -> Result<()> {
     let mut corpus = String::new();
     visit(&root.join("tests"), &mut |path| {
         if path.extension().is_some_and(|e| e == "rs") {
-            corpus.push_str(&std::fs::read_to_string(path)?);
+            corpus.push_str(&strip_comments(&std::fs::read_to_string(path)?));
         }
         Ok(())
     })?;
@@ -431,16 +487,19 @@ fn profile_coverage(name: &str) -> Result<()> {
     println!("{} (OCPP 2.0.1 Part 5)\n", profile.name);
     let mut covered = 0;
     for action in profile.actions {
-        let seen = corpus.contains(action);
-        covered += usize::from(seen);
-        println!("  [{}] {action}", if seen { "x" } else { " " });
+        let how = drives(&corpus, action);
+        covered += usize::from(how.is_some());
+        match how {
+            Some(evidence) => println!("  [x] {action:<38} {evidence}"),
+            None => println!("  [ ] {action}"),
+        }
     }
     println!(
-        "\n  {covered}/{} action(s) named in a scenario test",
+        "\n  {covered}/{} action(s) driven by a scenario test",
         profile.actions.len()
     );
     println!(
-        "  (every action of every version is exercised by the schema conformance suite; this\n            counts the ones a *scenario* test drives, which is what certification asks about)"
+        "  (every action of every version is exercised by the schema conformance suite; this\n              counts the ones a *scenario* test drives, which is what certification asks about.\n              Comments are stripped before matching: an action named in prose is not a test.)"
     );
 
     if !profile.components.is_empty() {
@@ -469,4 +528,105 @@ fn visit(dir: &Path, f: &mut impl FnMut(&Path) -> Result<()>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// How a test drives an action, if it does.
+///
+/// A plain substring search over the test sources counted an action as covered when a *doc
+/// comment* mentioned it, which is not a test — it is a sentence. Coverage now requires one of
+/// two things that only appear when code actually handles the action:
+///
+/// * a typed payload — `<Action>Request` / `<Action>Response`, which a test can only name by
+///   constructing or decoding one;
+/// * the wire action name as a string literal, which is how a test drives the action through
+///   the engine or the framing layer.
+///
+/// Returns the evidence so the report can be audited rather than believed.
+fn drives(corpus: &str, action: &str) -> Option<&'static str> {
+    if corpus.contains(&format!("{action}Request")) || corpus.contains(&format!("{action}Response"))
+    {
+        return Some("typed payload");
+    }
+    if corpus.contains(&format!("\"{action}\"")) {
+        return Some("on the wire");
+    }
+    None
+}
+
+/// Removes `//` and `/* */` comments, leaving string literals intact.
+///
+/// Coverage is measured over what the tests *do*, and a comment is not a test. String literals
+/// are kept because `Input::Received(r#"[2,"c1","ClearCache",{}]"#)` is exactly how a scenario
+/// test drives an action.
+fn strip_comments(source: &str) -> String {
+    let bytes = source.as_bytes();
+    let mut out = String::with_capacity(source.len());
+    let mut i = 0;
+    let (mut in_str, mut in_raw, mut esc) = (false, false, false);
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_str {
+            out.push(b as char);
+            if in_raw {
+                // A raw string ends at the first quote; `r#"..."#` hashes are handled by the
+                // quote-then-hash sequence, which the `#` below simply copies through.
+                if b == b'"' {
+                    in_str = false;
+                    in_raw = false;
+                }
+            } else if esc {
+                esc = false;
+            } else if b == b'\\' {
+                esc = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+        if b == b'r' && i + 1 < bytes.len() && (bytes[i + 1] == b'"' || bytes[i + 1] == b'#') {
+            let mut j = i + 1;
+            while j < bytes.len() && bytes[j] == b'#' {
+                j += 1;
+            }
+            if j < bytes.len() && bytes[j] == b'"' {
+                out.push_str(&source[i..=j]);
+                i = j + 1;
+                in_str = true;
+                in_raw = true;
+                continue;
+            }
+        }
+        if b == b'"' {
+            in_str = true;
+            out.push('"');
+            i += 1;
+            continue;
+        }
+        if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+            let mut depth = 1;
+            i += 2;
+            while i < bytes.len() && depth > 0 {
+                if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+                    depth += 1;
+                    i += 2;
+                } else if bytes[i] == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                    depth -= 1;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            continue;
+        }
+        out.push(b as char);
+        i += 1;
+    }
+    out
 }

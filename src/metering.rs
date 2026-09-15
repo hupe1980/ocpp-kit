@@ -136,18 +136,9 @@ impl SignedMeterValue {
 
     /// The record itself: the bytes the meter signed.
     ///
-    /// `signedMeterData` is specified as Base64 (2.0.1 Part 2 §2.46) and is usually sent that
-    /// way. Stations that put the record in plain are common enough that refusing them is not
-    /// an option — and the refusal would be a quiet one, because a station whose record
-    /// "is not Base64" simply stops being billable for a reason nobody looks for.
-    ///
-    /// The two can never collide, so both are read:
-    ///
-    /// * An **OCMF** record announces itself with the ASCII prefix `OCMF|`, and `|` is not in
-    ///   the Base64 alphabet. Nothing Base64 can start that way.
-    /// * Anything else containing a character outside the Base64 alphabet is likewise not
-    ///   Base64 — an EDL record is XML, which starts `<`.
-    /// * What is left is Base64 and is decoded.
+    /// Equivalent to [`record`](Self::record) discarding the encoding. Use `record` where the
+    /// encoding matters — a station sending the record in plain is not conforming, and that
+    /// is worth reporting rather than absorbing.
     ///
     /// Nothing is re-encoded on the way out: these are the bytes the signature covers.
     ///
@@ -155,12 +146,36 @@ impl SignedMeterValue {
     ///
     /// [`SignedDataError`] when the field is empty — an empty record is not a record.
     pub fn decoded(&self) -> Result<Vec<u8>, SignedDataError> {
+        self.record().map(|record| record.bytes)
+    }
+
+    /// The record, with **how the station wrote it**.
+    ///
+    /// 2.0.1 Part 2 §2.46 specifies Base64; plenty of stations send the record in plain, and
+    /// refusing those is a quiet failure — the station keeps sending and its sessions stop
+    /// being billable. Both are read, and which arrived is reported rather than absorbed, the
+    /// same contract [`decode_public_key`] has: only one of them conforms, and the consumer
+    /// billing from the record is the one who has to raise it with the vendor.
+    ///
+    /// Told apart by alphabet: OCMF begins `OCMF|`, EDL is XML beginning `<`, and neither
+    /// character is in the Base64 alphabet. Text made *only* of Base64 characters is taken as
+    /// Base64 — the one ambiguous case, unreachable for either format OCPP names here, and
+    /// resolved the way the specification says the field is written.
+    ///
+    /// # Errors
+    ///
+    /// [`SignedDataError`] when the field is empty — an empty record is not a record.
+    pub fn record(&self) -> Result<SignedRecord, SignedDataError> {
         let text = self.signed_meter_data.trim();
         if text.is_empty() {
             return Err(SignedDataError::new("signedMeterData is empty"));
         }
+        let plain = |bytes: &str| SignedRecord {
+            bytes: bytes.as_bytes().to_vec(),
+            encoding: RecordEncoding::Plain,
+        };
         if text.starts_with(OCMF_PREFIX) {
-            return Ok(text.as_bytes().to_vec());
+            return Ok(plain(text));
         }
         // Whitespace inside a Base64 field carries no information, so a line-wrapped record
         // is still one; the decoder does not skip it for us.
@@ -169,13 +184,19 @@ impl SignedMeterValue {
             .filter(|byte| !byte.is_ascii_whitespace())
             .collect();
         if !is_base64_alphabet(&compact) {
-            return Ok(text.as_bytes().to_vec());
+            return Ok(plain(text));
         }
         // Padding-indifferent, so a station that omits `=` is not refused over a character
         // that carries no information either.
-        BASE64
-            .decode(&compact)
-            .map_or_else(|_| Ok(text.as_bytes().to_vec()), Ok)
+        BASE64.decode(&compact).map_or_else(
+            |_| Ok(plain(text)),
+            |bytes| {
+                Ok(SignedRecord {
+                    bytes,
+                    encoding: RecordEncoding::Base64,
+                })
+            },
+        )
     }
 
     /// [`decoded`](Self::decoded) as text.
@@ -298,6 +319,53 @@ impl fmt::Display for SignedDataError {
 
 #[cfg(feature = "std")]
 impl std::error::Error for SignedDataError {}
+
+/// How a station wrote `signedMeterData`.
+///
+/// Reported by [`SignedMeterValue::record`], because only one of these is conforming and a
+/// consumer billing from the record is the party that needs to know.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RecordEncoding {
+    /// Base64, as 2.0.1 Part 2 §2.46 specifies.
+    Base64,
+    /// The record in plain, which the specification does not permit and many stations send.
+    ///
+    /// Unambiguous — both formats OCPP names for this field carry a non-Base64 character in
+    /// their first bytes — but worth reporting to whoever owns the fleet.
+    Plain,
+}
+
+impl RecordEncoding {
+    /// Whether this is the encoding 2.0.1 Part 2 §2.46 specifies.
+    #[must_use]
+    pub const fn is_conforming(self) -> bool {
+        matches!(self, RecordEncoding::Base64)
+    }
+}
+
+/// A signed record and the encoding it arrived in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignedRecord {
+    /// The record itself — the bytes the signature covers, never re-encoded.
+    pub bytes: Vec<u8>,
+    /// How the station wrote it.
+    pub encoding: RecordEncoding,
+}
+
+impl SignedRecord {
+    /// The record as text, which is what OCMF and EDL both are.
+    ///
+    /// # Errors
+    ///
+    /// [`SignedDataError`] when the record is not UTF-8, which means it is a binary format
+    /// and [`bytes`](Self::bytes) is the right field for it.
+    pub fn as_text(&self) -> Result<String, SignedDataError> {
+        core::str::from_utf8(&self.bytes)
+            .map(ToOwned::to_owned)
+            .map_err(|_| SignedDataError::new("the signed record is not UTF-8 text"))
+    }
+}
 
 /// How the `publicKey` field was written.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -805,6 +873,34 @@ mod tests {
         // An empty record is not a record.
         assert!(SignedMeterValue::new("").decoded().is_err());
         assert!(SignedMeterValue::new("   ").decoded().is_err());
+    }
+
+    #[test]
+    fn which_encoding_the_station_used_is_reported_not_absorbed() {
+        const RECORD: &str = "OCMF|{\"FV\":\"1.0\"}|{\"SD\":\"3044\"}";
+
+        // The conforming shape (2.0.1 Part 2 §2.46).
+        let encoded = SignedMeterValue::new(BASE64.encode(RECORD));
+        let record = encoded.record().unwrap();
+        assert_eq!(record.encoding, RecordEncoding::Base64);
+        assert!(record.encoding.is_conforming());
+        assert_eq!(record.as_text().unwrap(), RECORD);
+
+        // The shape a great many stations send, which is *not* conforming — a consumer that
+        // wants to tell its vendor so needs this, and cannot get it from the bytes.
+        let plain = SignedMeterValue::new(RECORD);
+        let record = plain.record().unwrap();
+        assert_eq!(record.encoding, RecordEncoding::Plain);
+        assert!(!record.encoding.is_conforming());
+        assert_eq!(record.as_text().unwrap(), RECORD);
+
+        // EDL is XML, and `<` is not in the Base64 alphabet either.
+        let xml = SignedMeterValue::new("<?xml version=\"1.0\"?><edl/>");
+        assert_eq!(xml.record().unwrap().encoding, RecordEncoding::Plain);
+
+        // `decoded` stays the shorthand, and cannot disagree with `record`.
+        assert_eq!(plain.decoded().unwrap(), plain.record().unwrap().bytes);
+        assert_eq!(encoded.decoded().unwrap(), encoded.record().unwrap().bytes);
     }
 
     /// The bridge has to work in both directions. A Local Controller relaying between

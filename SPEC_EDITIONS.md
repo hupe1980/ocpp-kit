@@ -65,16 +65,11 @@ R DER Control · S Battery Swapping** (new in 2.1).
 `RequestBatterySwap`, `SetDERControl`, `SetDefaultTariff`, `UpdateDynamicSchedule`,
 `UsePriorityCharging`, `VatNumberValidation`.
 
-## Known gap
+## Editions these schemas predate
 
-OCA published **OCPP 2.0.1 edition 4** and **OCPP 2.1 edition 2** on 2025-12-04, with errata
-in 2026-04. The schemas vendored here are older — 2.0.1 FINAL and 2.1 edition 1 — as the table
-above records.
-
-Closing that gap is a mechanical, reviewable change: drop the new schemas into
-`schemas/<version>/`, run `cargo xtask codegen`, read the diff, and update this file. The
-schema conformance suite validates the new types against the new schemas automatically, and
-the action-count assertions in the generator will flag any action that appeared or vanished.
+OCA published **OCPP 2.0.1 edition 4** and **OCPP 2.1 edition 2** on 2025-12-04, with errata in
+2026-04. What is vendored here is older — 2.0.1 FINAL and 2.1 edition 1 — as the table above
+records.
 
 ## Published-schema defects handled explicitly
 

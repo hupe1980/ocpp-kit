@@ -126,6 +126,8 @@ pub enum UpdateType {
 /// The result of a `SendLocalList` (`UpdateStatusEnumType`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
+#[must_use = "a refused update left the list unchanged — `VersionMismatch` in particular means \
+              the CSMS and the station now disagree about what is on it"]
 pub enum UpdateStatus {
     /// Applied.
     Accepted,
@@ -355,6 +357,7 @@ pub enum LocalSource {
 /// What to do about one `IdToken`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
+#[must_use = "this is the authorization decision: discarding it authorizes everyone"]
 pub enum Decision {
     /// Something local answered. Act on `info.status` without contacting the CSMS.
     Local {
@@ -591,12 +594,12 @@ mod tests {
     #[test]
     fn a_full_update_replaces_the_list() {
         let mut list = LocalAuthorizationList::new();
-        list.update(
+        let _ = list.update(
             UpdateType::Full,
             1,
             alloc::vec![("A".into(), Some(IdTokenInfo::accepted()))],
         );
-        list.update(
+        let _ = list.update(
             UpdateType::Full,
             2,
             alloc::vec![("B".into(), Some(IdTokenInfo::accepted()))],
@@ -624,7 +627,7 @@ mod tests {
 
     fn seeded() -> Authorizer {
         let mut authorizer = Authorizer::new();
-        authorizer.list.update(
+        let _ = authorizer.list.update(
             UpdateType::Full,
             1,
             alloc::vec![

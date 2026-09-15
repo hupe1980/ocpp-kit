@@ -11,7 +11,7 @@ repository = "https://github.com/hupe1980/ocpp-kit"
 
 [package]
 name = "ocpp-kit"
-version = "0.2.0"
+version = "0.3.0"
 edition.workspace = true
 rust-version.workspace = true
 description = "Open Charge Point Protocol (OCPP 1.6J, 2.0.1, 2.1) toolkit for Rust: typed messages, OCPP-J framing, a sans-I/O protocol engine, and transports for charging stations, CSMS and local controllers."
@@ -24,7 +24,7 @@ keywords = ["ocpp", "ev-charging", "emobility", "charging-station", "csms"]
 categories = ["network-programming", "api-bindings", "embedded"]
 # The schemas ship because `tests/schema_conformance.rs` reads them: they are what makes the
 # generated types verifiable rather than merely asserted.
-exclude = ["specs/", ".github/", "site/", "fuzz/"]
+exclude = ["specs/", ".github/", "site/", "fuzz/", "concepts/"]
 
 [dependencies]
 serde = { version = "1.0.219", default-features = false, features = ["alloc", "derive"] }
@@ -98,6 +98,10 @@ required-features = ["testkit"]
 [[test]]
 name = "properties"
 required-features = ["station", "csms"]
+
+[[test]]
+name = "scenarios"
+required-features = ["tokio", "v2_1"]
 
 [[test]]
 name = "schema_conformance"

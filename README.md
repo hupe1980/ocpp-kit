@@ -154,6 +154,13 @@ round-tripped through pseudo-random schema-valid payloads in CI, and the result 
 back against the official schema — 9 000+ round trips per run. The types cannot quietly drop
 a member, widen a constraint, or miss an enumeration value.
 
+**Every certification-profile action is driven, not just typed.** Schema round trips prove the
+types match the schemas; they say nothing about whether an action dispatches. So every action
+OCPP 2.0.1 Part 5 names — all 76, across all eight profiles — is exercised as a real exchange
+over a socket, asserting the typed response on both sides. `cargo xtask coverage --profile all`
+reports it, and counts an action only when a test names its typed payload or puts it on the
+wire.
+
 **Compression, because 2.1 requires it.** Part 4 §3.4 Table 2 makes RFC 7692
 `permessage-deflate` **required** for a CSMS and a Local Controller. No general-purpose Rust
 WebSocket crate implements it — and RFC 6455 obliges a crate that does not to *reject* the
@@ -286,8 +293,9 @@ $ ocpp-cli station --url ws://… --identity CS-0001  # a mock charging station
 $ cargo xtask codegen           # regenerate src/v1_6, src/v2_0_1, src/v2_1 from schemas/
 $ cargo xtask codegen --check   # what CI runs; fails if the committed code is stale
 $ cargo xtask schema-report     # action, enum and type counts per version
+$ cargo xtask schema-diff       # what actually differs between 2.0.1 and 2.1 (--check in CI)
 $ cargo xtask coverage          # which specification requirement IDs the tests cite
-$ cargo xtask coverage --profile core   # how much of a certification profile the tests drive
+$ cargo xtask coverage --profile all    # how much of each certification profile the tests drive
 $ cargo xtask appendix          # regenerate src/standard from Part 2 — Appendices
 $ cargo xtask no-floats         # fail if an f32/f64 reaches a public signature
 $ cargo xtask ci                # run what CI runs — commands *and* env — from the workflow

@@ -26,6 +26,8 @@ use alloc::vec::Vec;
 /// What `ChangeConfiguration` answers (`ConfigurationStatus`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
+#[must_use = "a key that was rejected or is not supported left the configuration unchanged, and \
+              `ChangeConfiguration.conf` has to say so"]
 pub enum ConfigurationStatus {
     /// Stored and in effect.
     Accepted,

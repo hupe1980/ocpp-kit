@@ -328,7 +328,7 @@ fn the_ledger_reaches_the_same_state_whatever_order_events_arrive_in() {
         // In order.
         let mut ordered = Ledger::new();
         for event in &events {
-            ordered.ingest(event);
+            let _ = ordered.ingest(event);
         }
 
         // Shuffled, with duplicates sprinkled in — which is what a retrying station produces.
@@ -339,7 +339,7 @@ fn the_ledger_reaches_the_same_state_whatever_order_events_arrive_in() {
         }
         let mut duplicates = 0;
         for index in order {
-            shuffled.ingest(&events[index]);
+            let _ = shuffled.ingest(&events[index]);
             if rng.chance(40) {
                 assert_eq!(
                     shuffled.ingest(&events[index]),
@@ -381,7 +381,7 @@ fn a_gap_is_reported_exactly_when_a_sequence_number_is_missing() {
         sent.insert(i32::try_from(highest).unwrap());
 
         for seq in &sent {
-            ledger.ingest(&TransactionEvent::new(
+            let _ = ledger.ingest(&TransactionEvent::new(
                 station.clone(),
                 "tx-1",
                 *seq,

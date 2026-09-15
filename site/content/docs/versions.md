@@ -95,10 +95,16 @@ standardized **components and variables** of the device model, which 1.6 does no
 
 ## Schema-level
 
-2.0.1 and 2.1 share 128 schema files by name, but 26 of them changed — across 23 actions,
+2.0.1 and 2.1 share 128 schema files by name, and **95 of them changed** — across 58 actions,
 including `Authorize`, `TransactionEvent`, `SetChargingProfile`, `ReserveNow`, `TriggerMessage`
 and `NotifyEVChargingNeeds`. That is why the crate generates **separate type sets per version**
-rather than sharing a "2.x" set: sharing would silently mis-validate 2.0.1.
+rather than sharing a "2.x" set: sharing would silently mis-validate 2.0.1 across three quarters
+of the surface the two versions look like they have in common.
+
+Most differences are small, which is what makes them dangerous: `ClearCacheResponse` differs
+only in `StatusInfoType.additionalInfo` going from `maxLength` 512 to 1024 — invisible in review,
+and it rejects a conforming 2.1 station. `cargo xtask schema-diff` derives these numbers from the
+vendored schemas and `--check` fails the build when they move.
 
 2.1 adds 27 actions over 2.0.1 — `AFRRSignal`, `BatterySwap`, the DER Control block, the Tariff
 and Cost block, periodic event streams — and three functional blocks: Q (Bidirectional Power

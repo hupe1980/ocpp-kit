@@ -24,8 +24,9 @@ specification documents are not redistributable and are not in the repository.
 WebAssembly, and one implementation of the protocol rules for every runtime — including the
 three roles, which would otherwise be three copies of the same state machine.
 
-**Separate type sets per version.** 26 of the 128 shared 2.0.1 schema files changed in 2.1.
-Sharing types between the versions would silently mis-validate 2.0.1.
+**Separate type sets per version.** 95 of the 128 shared 2.0.1 schema files changed in 2.1,
+across 58 actions (`cargo xtask schema-diff`). Sharing types between the versions would silently
+mis-validate 2.0.1.
 
 **`jiff` for time, an exact decimal for numbers.** The schemas say `"type": "number"`, and the
 obvious reading of that is `f64`. It is the wrong one. An OCPP number is a meter register, a
@@ -65,8 +66,6 @@ dependency less.
 **A scenario file format.** With [`testkit::Sim`](@/docs/testing.md) a transcript is a handful
 of statements in a `#[test]` — no format to learn and no parser to maintain.
 
-## Feature flags that do not exist yet
-
-`chrono` / `time` conversions, `rust_decimal`, `schemars`, an `axum` integration. Each is a
-permanent maintenance surface, none has a user asking for it, and every one can be added later
-without a breaking change. A feature flag is a promise; an unused one is a promise for nothing.
+**Feature flags for `chrono` / `time`, `rust_decimal`, `schemars` or `axum`.** Each is a
+permanent maintenance surface with no user asking for it. A feature flag is a promise; an unused
+one is a promise for nothing.

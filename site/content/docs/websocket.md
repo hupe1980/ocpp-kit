@@ -48,7 +48,7 @@ history of framing bugs, and several of them are security bugs.
 
 | | |
 |---|---|
-| **Unit tests** | ~40, one per rule: masking at every alignment, each length form, fragmentation, interleaved control frames, close-code validation, size limits, UTF-8, RSV bits |
+| **Unit tests** | 48, one per rule: masking at every alignment, each length form, fragmentation, interleaved control frames, close-code validation, size limits, UTF-8, RSV bits |
 | **Interop** | Every frame is put past `tokio-tungstenite` — an independent, widely used implementation — in both directions. Our server serves its client; our client talks to its server; a message it fragments, we reassemble. It is a **dev-dependency**: the reference, never the runtime. |
 | **Fuzzing** | `cargo fuzz run websocket` drives the codec with arbitrary bytes, asserting that decoding always terminates, never panics, and that anything decoded survives a re-encode |
 | **On the wire** | A test drives a raw socket, checks the CSMS answers `Sec-WebSocket-Extensions: permessage-deflate`, sends a compressed frame with `RSV1` set, and checks the answer comes back compressed too |

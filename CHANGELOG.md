@@ -4,7 +4,57 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.0] — unreleased
+## [0.3.0] — unreleased
+
+### Added
+
+**`cargo xtask schema-diff`** derives how much OCPP 2.0.1 and 2.1 actually differ from the
+vendored schemas — 95 of the 128 files they share by name, across 58 actions — and `--check`
+fails the build when that moves. The comparison is structural: 2.1 re-indented every file and
+added an `$id`, so a textual diff reports 128 of 128 and means nothing.
+
+**`SignedMeterValue::record`** returns the signed record together with the `RecordEncoding` the
+station used. 2.0.1 Part 2 §2.46 specifies Base64 and many stations send the record in plain;
+both were already read, but which one arrived was discarded. `decoded` is now shorthand for
+`record().bytes`, so the two cannot disagree.
+
+**`cargo xtask coverage --profile all`** reports every certification profile at once.
+
+### Changed
+
+**Every action of every certification profile is driven by a scenario test.** `tests/scenarios.rs`
+runs each of the 76 actions OCPP 2.0.1 Part 5 names — across all eight profiles — as a real
+exchange over loopback TCP, asserting the typed response on both sides. Previously 13 of the 34
+Core actions were driven and the rest were covered only by the schema round trips, which say
+nothing about dispatch.
+
+**Every verdict type is `#[must_use]`.** `Ingested`, `Decision`, `SetStatus`,
+`ConfigurationStatus`, `UpdateStatus` and `RelayDecision` are answers a caller has to act on, and
+discarding one compiled silently at any lint level. `Ingested` is the one that costs money:
+OCPP requires a station to retry, so a lost answer to `StopTransaction` brings the message back,
+and a CSMS that ignores `Duplicate` settles a second record out of it. The attribute is on the
+enums, so it covers every method returning one. `Ingested` also now documents which way to fall
+for an unrecognised variant, since it is `#[non_exhaustive]`.
+
+**`cargo xtask coverage --profile` no longer counts a comment.** It stripped nothing and matched
+the action name anywhere in the test sources, so a sentence in a doc comment counted as
+coverage. It now requires evidence that a test drives the action — a typed payload or the action
+name on the wire — and prints which.
+
+### Fixed
+
+**`FileStore` assumed a single writer.** Two processes on one journal silently interleaved
+records into a queue neither of them had, on messages a station is obliged to deliver exactly
+once. A single writer's sequence numbers only move forward, so a duplicate on replay is proof of
+a second writer: `open` refuses the file and names the cause. Deliberately not a lock file — a
+stale lock would refuse to start a station that had just lost power, which is when its queue
+most needs replaying.
+
+**`cargo xtask schema-report`** printed direction counts that did not sum to the action total,
+because `DataTransfer` is originated by either peer and was counted under both. The overlap is
+named.
+
+## [0.2.0] — 2026-09-01
 
 A hard cut, driven by what a CSMS billing under German calibration law could not get out of
 `0.1.0`: an exact number type, and the signed meter record itself.
@@ -40,6 +90,13 @@ not have to decide what to do when that map misses for a station it definitely a
 opt-in extra.
 
 ### Added
+
+**`cargo xtask schema-diff`** derives how much OCPP 2.0.1 and 2.1 actually differ from the
+vendored schemas — 95 of the 128 files they share by name, across 58 actions — and `--check`
+fails the build when that moves. The comparison is structural: 2.1 re-indented every file and
+added an `$id`, so a textual diff reports 128 of 128 and means nothing.
+
+**`cargo xtask coverage --profile all`** reports every certification profile in one line each.
 
 **`metering` — signed meter values**, the record a customer may actually be billed for. Under
 `MessEG` §33 a billable value is one the customer can check, which is the data set the meter

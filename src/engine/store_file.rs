@@ -111,8 +111,13 @@ const COMPACT_FLOOR: usize = 64;
 /// (`sync_data`). A crash mid-append leaves a partial final line, discarded on the next open:
 /// it described a message that was never reported as queued.
 ///
-/// Not concurrent — one process, one file — and no defence against a corrupt filesystem. For
-/// anything else, implement [`MessageStore`]; it is four synchronous methods.
+/// One process, one file — checked, not assumed. A second writer produces a sequence number
+/// twice, which one forward-only counter cannot, and [`open`](Self::open) refuses the journal
+/// and names the cause. Refused rather than repaired: the interleaved records are each
+/// well-formed, so a repair would be a guess about whose queue is real.
+///
+/// No defence against a corrupt filesystem. For anything else, implement [`MessageStore`]; it
+/// is four synchronous methods.
 pub struct FileStore {
     path: PathBuf,
     journal: File,
@@ -180,6 +185,10 @@ impl FileStore {
     fn replay(path: &Path) -> Result<(BTreeMap<Seq, QueuedCall>, Seq), StoreError> {
         let mut live: BTreeMap<Seq, QueuedCall> = BTreeMap::new();
         let mut next_seq: Seq = 0;
+        // Every sequence number this journal has ever pushed, not just the ones still live:
+        // an `Ack` removes an entry from `live`, so checking `live` alone would miss a
+        // duplicate that arrives after one.
+        let mut pushed: alloc::collections::BTreeSet<Seq> = alloc::collections::BTreeSet::new();
 
         let file = match File::open(path) {
             Ok(file) => file,
@@ -199,6 +208,23 @@ impl FileStore {
             };
             match record {
                 Record::Push { seq, entry } => {
+                    // A single writer allocates sequence numbers from a counter that only
+                    // ever moves forward, so it cannot produce the same one twice. Seeing it
+                    // twice means two processes have been appending to this journal — and
+                    // their interleaved records describe a queue neither of them has.
+                    //
+                    // This is refused rather than repaired: the records are individually
+                    // well-formed, so any repair would be a guess about which writer's view
+                    // of the queue is the real one, on messages a station is obliged to
+                    // deliver exactly once.
+                    if !pushed.insert(seq) {
+                        return Err(StoreError::new(format!(
+                            "{}: sequence number {seq} was queued twice, which one writer \
+                             cannot do — two processes have the same journal open. Give each \
+                             one its own file.",
+                            path.display(),
+                        )));
+                    }
                     next_seq = next_seq.max(seq + 1);
                     live.insert(seq, entry.into_call()?);
                 }
@@ -439,6 +465,51 @@ mod tests {
 
         let store = FileStore::open(&path).unwrap();
         assert_eq!(store.pending().unwrap()[0].1.kind, MessageKind::Send);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn two_writers_on_one_journal_are_refused_rather_than_merged() {
+        let path = std::env::temp_dir().join("ocpp-kit-two-writers.jsonl");
+        let _ = std::fs::remove_file(&path);
+
+        // What two processes each holding their own counter would leave behind: both allocate
+        // seq 0, and both append a well-formed record for it.
+        let entry = |action: &str| {
+            format!(
+                r#"{{"op":"push","seq":0,"action":"{action}","payload":"{{}}","send":false,"attempts":0,"transactional":true}}"#
+            )
+        };
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n{}\n",
+                entry("TransactionEvent"),
+                entry("StopTransaction")
+            ),
+        )
+        .unwrap();
+
+        let error = FileStore::open(&path).expect_err("a duplicate seq is not recoverable");
+        assert!(
+            error.reason.contains("queued twice"),
+            "the error has to name the cause, or an operator debugs the wrong thing: {}",
+            error.reason
+        );
+
+        // An `Ack` in between does not hide it: the check is over everything ever pushed, not
+        // over what is still live.
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n{{\"op\":\"ack\",\"seq\":0}}\n{}\n",
+                entry("TransactionEvent"),
+                entry("StopTransaction")
+            ),
+        )
+        .unwrap();
+        assert!(FileStore::open(&path).is_err());
+
         std::fs::remove_file(&path).unwrap();
     }
 }
