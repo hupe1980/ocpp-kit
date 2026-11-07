@@ -381,12 +381,12 @@ pub enum Decision {
 /// The `AuthCtrlr` and `LocalAuthListCtrlr` variables that decide where an answer may come
 /// from.
 ///
-/// All four are named by the specification, and three of them are `Required`. Hard-coding
+/// All five are named by the specification, and three of them are `Required`. Hard-coding
 /// any of them means a station that cannot be configured the way its operator needs — and,
 /// worse, one that authorizes locally when it was told not to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-// Four booleans because the specification defines four independent switches; grouping them
+// Five booleans because the specification defines five independent switches; grouping them
 // into an enum would invent combinations it does not have.
 #[allow(clippy::struct_excessive_bools)]
 pub struct AuthorizationPolicy {
@@ -402,6 +402,15 @@ pub struct AuthorizationPolicy {
     /// `AuthCtrlr.OfflineTxForUnknownIdEnabled` — whether an identifier neither the list nor
     /// the cache knows may still start a transaction while offline (C13.FR.04, C15).
     pub offline_tx_for_unknown_id: bool,
+    /// `LocalAuthListCtrlr.SupportsExpiryDateTime` — whether a local-list entry's
+    /// `cacheExpiryDateTime` is honoured.
+    ///
+    /// `true` (the default): an expired entry is disregarded — online the CSMS is asked
+    /// (C14.FR.05), offline it is refused, since it is not an unknown id (C13.FR.05/06). A
+    /// station using this default reports the variable as `true`. `false`: the list's expiry
+    /// is not checked (C13.FR.02/04, C14.FR.02: "does not exist or is false"). The cache's
+    /// own expiry is unaffected either way.
+    pub local_list_supports_expiry: bool,
 }
 
 impl Default for AuthorizationPolicy {
@@ -414,6 +423,7 @@ impl Default for AuthorizationPolicy {
             local_authorize_offline: true,
             local_pre_authorize: false,
             offline_tx_for_unknown_id: false,
+            local_list_supports_expiry: true,
         }
     }
 }
@@ -444,6 +454,13 @@ impl AuthorizationPolicy {
     #[must_use]
     pub const fn offline_tx_for_unknown_id(mut self, enabled: bool) -> Self {
         self.offline_tx_for_unknown_id = enabled;
+        self
+    }
+
+    /// `LocalAuthListCtrlr.SupportsExpiryDateTime`.
+    #[must_use]
+    pub const fn local_list_supports_expiry(mut self, enabled: bool) -> Self {
+        self.local_list_supports_expiry = enabled;
         self
     }
 }
@@ -511,7 +528,14 @@ impl Authorizer {
             });
 
         if let Some((source, info)) = local {
-            let status = info.status_at(now);
+            // Edition 4 (C13/C14): the list's `cacheExpiryDateTime` counts only where the
+            // station supports it; the cache's always does.
+            let status =
+                if source == LocalSource::LocalList && !self.policy.local_list_supports_expiry {
+                    info.status
+                } else {
+                    info.status_at(now)
+                };
             if status == AuthorizationStatus::Accepted {
                 if may_use_local {
                     return Decision::Local {
@@ -756,6 +780,29 @@ mod tests {
             permissive.decide("NEVER-SEEN", false, now()),
             Decision::OfflineUnknown { start_anyway: true }
         );
+    }
+
+    /// 2.0.1 edition 4 C13/C14: whether a listed token's expiry counts is
+    /// `LocalAuthListCtrlr.SupportsExpiryDateTime`'s call.
+    #[test]
+    fn a_listed_tokens_expiry_counts_only_where_the_station_supports_it() {
+        // "OLD" is listed `Accepted`, expiring 2024-01-01; `now()` is later.
+        let mut supports = seeded();
+        // Offline: expired, and not an unknown id, so refused (C13.FR.05/06).
+        assert!(matches!(
+            supports.decide("OLD", false, now()),
+            Decision::Local { info, .. } if info.status == AuthorizationStatus::Expired
+        ));
+        // Online: disregarded, so the CSMS is asked (C14.FR.05).
+        assert_eq!(supports.decide("OLD", true, now()), Decision::AskCsms);
+
+        // Not supported: the date does not count (C13.FR.02/04).
+        let mut ignores =
+            seeded().with_policy(AuthorizationPolicy::default().local_list_supports_expiry(false));
+        assert!(matches!(
+            ignores.decide("OLD", false, now()),
+            Decision::Local { info, .. } if info.status == AuthorizationStatus::Accepted
+        ));
     }
 
     /// `LocalAuthListCtrlr.LocalAuthListEnabled` switches the list off without emptying it.

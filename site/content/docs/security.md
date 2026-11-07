@@ -74,8 +74,9 @@ credentials are right but it will not connect":
 ```rust
 use ocpp_kit::transport::BasicAuthPassword;
 
-let legacy = BasicAuthPassword::hex("0001020304").unwrap();
-assert_eq!(legacy.as_bytes(), &[0, 1, 2, 3, 4]);
+// 1.6: 16–20 octets, written as 32–40 hex digits.
+let legacy = BasicAuthPassword::hex("000102030405060708090a0b0c0d0e0f").unwrap();
+assert_eq!(legacy.as_bytes().len(), 16);
 
 let modern = BasicAuthPassword::utf8("0123456789abcdef").unwrap();
 assert_eq!(modern.as_bytes(), b"0123456789abcdef");

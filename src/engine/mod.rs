@@ -44,8 +44,8 @@
 //!   `SHOULD NOT` — hence [`InboundConcurrency`]). Our own extra calls are queued, never
 //!   rejected.
 //! * **`SEND` is exempt** and is never answered (Part 4 §4.2.4, FR.07).
-//! * **Unknown message type numbers** are ignored on 1.6J and 2.1 and answered with
-//!   `MessageTypeNotSupported` on 2.0.1 (§4.4).
+//! * **Unknown message type numbers** are ignored on every version (1.6J §4.1.3, 2.x
+//!   Part 4 §4.1).
 //! * **Message timeout**, freeing the slot and starting the next queued call.
 //! * **Transaction-message retries only**, on the linear schedule of 1.6 §3.7.1 and the 2.x
 //!   `MessageAttempts[TransactionEvent]` variables, in chronological order, skipping a
@@ -781,6 +781,25 @@ impl<S: MessageStore> Engine<S> {
             });
         }
         Ok(engine)
+    }
+
+    /// Re-opens the boot gate, so the station registers again before ordinary traffic.
+    ///
+    /// The engine keeps its boot state across reconnects (Part 4 §5.4). The exception is
+    /// B10.FR.10 (2.0.1 edition 4, 2.1 edition 2): a station that "successfully connected after
+    /// having switched to a different `NetworkConnectionProfile`" SHALL send a
+    /// `BootNotificationRequest` "even if it has not rebooted". This returns the engine to
+    /// [`BootState::Idle`] and reports it as [`Output::BootState`], the same signal a
+    /// `Pending`/`Rejected` retry gives; the application then sends the `BootNotification`.
+    /// The Tokio station calls it when it connects on a different configuration slot.
+    pub fn require_boot(&mut self, now: Instant) {
+        self.advance(now);
+        if self.config.role != Role::ChargingStation || self.boot == BootState::Idle {
+            return;
+        }
+        self.boot = BootState::Idle;
+        self.boot_retry_at = None;
+        self.outputs.push_back(Output::BootState(BootState::Idle));
     }
 
     /// Changes the message timeout.

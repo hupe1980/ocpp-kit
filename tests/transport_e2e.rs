@@ -277,7 +277,10 @@ async fn a_station_and_a_csms_with_no_common_version_close_cleanly() {
         .unwrap()
         .url(format!("ws://127.0.0.1:{port}/ocpp"))
         .versions([Version::V1_6])
-        .password(ocpp_kit::transport::BasicAuthPassword::hex("00112233").unwrap())
+        .password(
+            ocpp_kit::transport::BasicAuthPassword::hex("00112233445566778899aabbccddeeff")
+                .unwrap(),
+        )
         .reconnect(false)
         .ping_interval(None)
         .build()
@@ -1072,4 +1075,78 @@ async fn sessions_report_compression_and_the_peers_close_frame() {
     .expect("a Disconnected event");
     let frame = peer_close.expect("the station sent a close frame");
     assert_eq!(frame.code, ocpp_kit::transport::CloseCode::NORMAL);
+}
+
+/// B10.FR.10 (2.0.1 edition 4, 2.1 edition 2): a station that connects over a *different*
+/// network configuration slot registers again, even though it never rebooted.
+#[tokio::test]
+async fn switching_network_profile_requires_a_new_boot_notification() {
+    let first = Arc::new(CsmsSide::new(v2_1::RegistrationStatus::Accepted));
+    // Slot 0's CSMS lets the station in once, then refuses it, forcing the switch.
+    let admitted = Arc::new(AtomicUsize::new(0));
+    let gate = admitted.clone();
+    let (first_port, first_csms) = start_csms(first, move |_auth: Auth| {
+        let gate = gate.clone();
+        async move {
+            if gate.fetch_add(1, Ordering::SeqCst) == 0 {
+                AuthOutcome::accept()
+            } else {
+                AuthOutcome::Reject
+            }
+        }
+    })
+    .await;
+    let second = Arc::new(CsmsSide::new(v2_1::RegistrationStatus::Accepted));
+    let (second_port, _second_csms) = start_csms(second.clone(), accept_all).await;
+
+    let password = || ocpp_kit::transport::BasicAuthPassword::utf8("0123456789abcdef").unwrap();
+    let profiles = NetworkProfiles::new([
+        NetworkProfile::new(0, format!("ws://127.0.0.1:{first_port}/ocpp"))
+            .security_profile(SecurityProfile::BasicAuth)
+            .password(password()),
+        NetworkProfile::new(1, format!("ws://127.0.0.1:{second_port}/ocpp"))
+            .security_profile(SecurityProfile::BasicAuth)
+            .password(password()),
+    ])
+    .priority([0, 1])
+    .unwrap()
+    .connection_attempts(1);
+    let station = Station::builder()
+        .identity("CS-SWITCH")
+        .unwrap()
+        .network_profiles(profiles)
+        .versions([Version::V2_1])
+        .backoff(ocpp_kit::engine::Backoff::immediate())
+        .ping_interval(None)
+        .handler(StationSide)
+        .build()
+        .unwrap()
+        .spawn()
+        .unwrap();
+    let mut events = station.events();
+    boot(&station).await;
+
+    // Slot 0 drops the session; the reconnect is refused there and lands on slot 1.
+    first_csms.shutdown(Duration::from_secs(1)).await;
+    let reopened = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match events.recv().await {
+                Ok(ocpp_kit::transport::Event::BootState(ocpp_kit::engine::BootState::Idle)) => {
+                    break;
+                }
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(error) => panic!("events ended: {error}"),
+            }
+        }
+    })
+    .await;
+    assert!(reopened.is_ok(), "the boot gate re-opened after the switch");
+    boot(&station).await;
+    assert_eq!(
+        second.boots.load(Ordering::SeqCst),
+        1,
+        "registered with slot 1's CSMS"
+    );
+
+    station.shutdown(Duration::from_secs(2)).await;
 }

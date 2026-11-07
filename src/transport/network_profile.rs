@@ -225,6 +225,15 @@ impl NetworkProfiles {
         self.slots.get(&slot)
     }
 
+    /// Gives every profile without its own password this one (B09.FR.16).
+    pub(crate) fn default_password(&mut self, password: &BasicAuthPassword) {
+        for profile in self.slots.values_mut() {
+            if profile.password.is_none() {
+                profile.password = Some(password.clone());
+            }
+        }
+    }
+
     /// The profile at position `index` of the priority list, wrapping.
     #[must_use]
     pub(crate) fn at(&self, index: usize) -> &NetworkProfile {

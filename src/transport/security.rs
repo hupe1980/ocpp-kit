@@ -125,6 +125,12 @@ pub const BASIC_AUTH_MAX_LEN: usize = 64;
 /// A Charging Station that must interoperate with any CSMS should stay at or below this.
 pub const BASIC_AUTH_INTEROPERABLE_MAX_LEN: usize = 40;
 
+/// The shortest 1.6 `AuthorizationKey`, in octets (Security Whitepaper A00.FR.205).
+pub const AUTHORIZATION_KEY_MIN_BYTES: usize = 16;
+
+/// The longest 1.6 `AuthorizationKey`, in octets (Security Whitepaper A00.FR.205).
+pub const AUTHORIZATION_KEY_MAX_BYTES: usize = 20;
+
 impl BasicAuthPassword {
     /// A 2.x `BasicAuthPassword`: at least 16 characters, at most
     /// [`BASIC_AUTH_MAX_LEN`], sent as UTF-8.
@@ -141,7 +147,9 @@ impl BasicAuthPassword {
 
     /// A 1.6 `AuthorizationKey`, given as the hexadecimal string the specification uses.
     ///
-    /// The decoded octets are what goes on the wire, not the hex text.
+    /// The decoded octets are what goes on the wire, not the hex text. The 1.6 Security
+    /// Whitepaper (edition 4, A00.FR.205) requires "minimal 16-bytes long" and "20 bytes
+    /// maximum" — 32 to 40 hexadecimal digits.
     pub fn hex(key: &str) -> Result<Self, CredentialError> {
         let text = key.trim();
         if !text.len().is_multiple_of(2) || text.is_empty() {
@@ -151,6 +159,9 @@ impl BasicAuthPassword {
         for pair in text.as_bytes().chunks(2) {
             let digits = core::str::from_utf8(pair).map_err(|_| CredentialError::NotHex)?;
             bytes.push(u8::from_str_radix(digits, 16).map_err(|_| CredentialError::NotHex)?);
+        }
+        if !(AUTHORIZATION_KEY_MIN_BYTES..=AUTHORIZATION_KEY_MAX_BYTES).contains(&bytes.len()) {
+            return Err(CredentialError::KeyLength(bytes.len()));
         }
         Ok(Self {
             secret: Zeroizing::new(bytes),
@@ -218,6 +229,9 @@ pub enum CredentialError {
     PasswordLength(usize),
     /// The 1.6 `AuthorizationKey` is not a hexadecimal string.
     NotHex,
+    /// The 1.6 `AuthorizationKey` decodes to fewer than [`AUTHORIZATION_KEY_MIN_BYTES`] or
+    /// more than [`AUTHORIZATION_KEY_MAX_BYTES`] octets (1.6 Security Whitepaper A00.FR.205).
+    KeyLength(usize),
 }
 
 impl fmt::Display for CredentialError {
@@ -230,6 +244,11 @@ impl fmt::Display for CredentialError {
             CredentialError::NotHex => {
                 f.write_str("the 1.6 AuthorizationKey must be an even-length hexadecimal string")
             }
+            CredentialError::KeyLength(len) => write!(
+                f,
+                "the 1.6 AuthorizationKey is {len} bytes; it must be \
+                 {AUTHORIZATION_KEY_MIN_BYTES}–{AUTHORIZATION_KEY_MAX_BYTES} (A00.FR.205)"
+            ),
         }
     }
 }
@@ -316,12 +335,22 @@ mod tests {
     #[test]
     fn a_16_authorization_key_is_hex_and_a_2x_password_is_utf8() {
         // The 1.6 whitepaper's AuthorizationKey is hex; the octets are the password.
-        let legacy = BasicAuthPassword::hex("0001020304").unwrap();
-        assert_eq!(legacy.as_bytes(), &[0, 1, 2, 3, 4]);
+        let legacy = BasicAuthPassword::hex("000102030405060708090a0b0c0d0e0f").unwrap();
+        assert_eq!(legacy.as_bytes(), &(0..16).collect::<Vec<u8>>()[..]);
         assert_eq!(
             BasicAuthPassword::hex("xyz").unwrap_err(),
             CredentialError::NotHex
         );
+        // Whitepaper A00.FR.205: 16 to 20 octets.
+        assert_eq!(
+            BasicAuthPassword::hex("0001020304").unwrap_err(),
+            CredentialError::KeyLength(5)
+        );
+        assert_eq!(
+            BasicAuthPassword::hex(&"ab".repeat(21)).unwrap_err(),
+            CredentialError::KeyLength(21)
+        );
+        assert!(BasicAuthPassword::hex(&"ab".repeat(20)).is_ok());
 
         // 2.x sends the text itself, and constrains its length (A00.FR.205).
         let modern = BasicAuthPassword::utf8("0123456789abcdef").unwrap();

@@ -202,12 +202,11 @@ with the citation next to them:
 | | 1.6J | 2.0.1 | 2.1 |
 |---|---|---|---|
 | Message types | 2, 3, 4 | 2, 3, 4 | + 5 `CALLRESULTERROR`, 6 `SEND` |
-| Unknown message type number | ignore the payload | answer `MessageTypeNotSupported` | ignore the payload |
 | Unreadable `MessageId` | no rule | answer with id `"-1"` | answer with id `"-1"` |
 | "Syntactically incorrect" | `FormationViolation` | `FormatViolation` | `FormatViolation` |
 | Occurrence violation | `OccurenceConstraintViolation` | `OccurrenceConstraintViolation` | `OccurrenceConstraintViolation` |
 | One outstanding `CALL` | `SHOULD NOT` | `SHALL NOT` | `SHALL NOT` |
-| Basic-auth password | `AuthorizationKey`, hexadecimal | `BasicAuthPassword`, UTF-8, ≥ 16 chars, ceiling 40–64 | same |
+| Basic-auth password | `AuthorizationKey`, hexadecimal, 16–20 bytes | `BasicAuthPassword`, UTF-8, ≥ 16 chars, ceiling 40–64 | same |
 | `permessage-deflate` | discouraged | – | CSMS and LC **shall** support — [implemented](https://hupe1980.github.io/ocpp-kit/docs/websocket/) |
 | Transaction ordering | strictly chronological (§3.7) | same | same |
 | Charging point | `connectorId`, no EVSEs | `evseId` | same |

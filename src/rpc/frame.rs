@@ -223,13 +223,13 @@ impl<'a> Frame<'a> {
     ///
     /// `version` decides which message types are accepted; a frame whose type number is not
     /// defined at all yields [`FrameError::UnknownMessageType`], which the caller must handle
-    /// per version (2.0.1 answers `MessageTypeNotSupported`, 1.6J and 2.1 ignore it).
+    /// by ignoring the message (1.6J §4.1.3, 2.x §4.1).
     pub fn parse(text: &'a str, version: Version) -> Result<Self, FrameError> {
         let elements: alloc::vec::Vec<&'a RawValue> =
             serde_json::from_str(text).map_err(|_| FrameError::NotAnArray)?;
 
         // Read the type element as a full-width integer: `[300, …]` is a badly chosen
-        // *number*, not a frame that stopped being an array, and §4.4 answers it differently.
+        // *number*, not a frame that stopped being an array, and is ignored rather than refused.
         let number = elements
             .first()
             .and_then(|e| serde_json::from_str::<i64>(e.get()).ok())
@@ -426,7 +426,7 @@ pub enum FrameError {
     },
     /// A message type number outside 2–6.
     ///
-    /// Part 4 §4.4: 1.6J and 2.1 ignore the message; 2.0.1 answers `MessageTypeNotSupported`.
+    /// Ignored on every version: 1.6J §4.1.3, 2.x Part 4 §4.1.
     UnknownMessageType {
         /// The raw JSON of the type element.
         number: String,
@@ -490,14 +490,11 @@ impl FrameError {
     /// What the receiver must send back, per Part 4 §4.2.3.
     #[must_use]
     pub fn reply(&self, version: Version) -> FrameReply {
+        // A type this version does not define — unknown everywhere, or a 2.1 type on an older
+        // version — is ignored before `message_type()` is consulted: a type-6 frame on 2.0.1
+        // is not "a SEND", because 2.0.1 has no SEND to recognise it as.
         if self.is_ignorable(version) {
             return FrameReply::Ignore;
-        }
-        // A type this version does not define is, to this version, an unknown type number,
-        // so §4.4 applies unchanged and `message_type()` must not be consulted: a type-6 frame
-        // on 2.0.1 is not "a SEND", because 2.0.1 has no SEND to recognise it as.
-        if matches!(self, FrameError::MessageTypeNotInVersion { .. }) {
-            return FrameReply::CallError;
         }
         match self.message_type() {
             // "A CALLRESULTERROR is sent back on receipt of a CALLRESULT that contains
@@ -521,14 +518,18 @@ impl FrameError {
 
     /// Whether the specification says to silently ignore this frame rather than answer it.
     ///
-    /// True only for a message type this version does not define, on 1.6J (§4.1.3) and 2.1
-    /// (§4.4). OCPP 2.0.1 §4.4 instead requires a `CALLERROR: MessageTypeNotSupported`.
+    /// True for a message type this version does not define, on every version: 1.6J
+    /// §4.1.3, and 2.x Part 4 §4.1 ("it SHALL ignore the message"). 2.0.1 used to answer it
+    /// with `MessageTypeNotSupported` under §4.4; the 2.0.1 edition 4 errata (2026-02) remove
+    /// that section as contradicting §4.1 and deprecate the code. `version` stays in the
+    /// signature because the answer has been per version before.
     #[must_use]
     pub fn is_ignorable(&self, version: Version) -> bool {
+        let _ = version;
         matches!(
             self,
             FrameError::UnknownMessageType { .. } | FrameError::MessageTypeNotInVersion { .. }
-        ) && !matches!(version, Version::V2_0_1)
+        )
     }
 
     /// The `CALLERROR` code to answer with, if the frame must be answered at all.

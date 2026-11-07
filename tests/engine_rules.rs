@@ -858,7 +858,7 @@ fn a_drain_that_overruns_its_deadline_closes_anyway() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn an_unknown_message_type_is_ignored_on_21_and_answered_on_201() {
+fn an_unknown_message_type_is_ignored_on_21_and_on_201() {
     let mut modern = booted_station(Version::V2_1);
     let mut recorder = Recorder::new();
     modern.handle(NOW, Input::Received(r#"[9,"1","Nope",{}]"#));
@@ -869,13 +869,11 @@ fn an_unknown_message_type_is_ignored_on_21_and_answered_on_201() {
         ProtocolViolation::UnknownMessageType { .. }
     ));
 
+    // 2.0.1 edition 4 errata (2026-02) removed §4.4's answer: ignored as well.
     let mut legacy = booted_station(Version::V2_0_1);
     legacy.handle(NOW, Input::Received(r#"[9,"1","Nope",{}]"#));
     recorder.drain(&mut legacy);
-    assert!(
-        recorder.only_frame().contains("MessageTypeNotSupported"),
-        "2.0.1 Part 4 §4.4 requires an answer"
-    );
+    assert_eq!(recorder.frames().len(), 0, "2.0.1 Part 4 §4.1: ignore it");
 }
 
 #[test]
@@ -1443,16 +1441,12 @@ fn a_message_type_number_outside_a_byte_is_an_unknown_type_not_a_broken_frame() 
         ));
     }
 
-    // 2.0.1 §4.4 is the exception: it answers.
+    // 2.0.1 too, since the edition 4 errata removed §4.4's `MessageTypeNotSupported` answer.
     let mut engine = booted_station(Version::V2_0_1);
     let mut recorder = Recorder::new();
     engine.handle(NOW, Input::Received(r#"[300,"x","Heartbeat",{}]"#));
     recorder.drain(&mut engine);
-    assert!(
-        recorder.only_frame().contains("MessageTypeNotSupported"),
-        "{:?}",
-        recorder.frames()
-    );
+    assert_eq!(recorder.frames().len(), 0, "{:?}", recorder.frames());
 }
 
 /// Part 4 §4.2.4: a `SEND` is never answered, so it cannot be "answered with an empty
@@ -1480,9 +1474,8 @@ fn a_send_completes_as_sent_rather_than_with_a_payload() {
 }
 
 /// A `SEND` or a `CALLRESULTERROR` arriving on 1.6J or 2.0.1 is, to that version, simply a
-/// message type number it does not define — §4.4 does not carve out "but a later OCPP defines
-/// it". So 2.0.1 answers `MessageTypeNotSupported` and 1.6J ignores it, exactly as they do for
-/// a number nobody defines.
+/// message type number it does not define — the rule does not carve out "but a later OCPP
+/// defines it". So both ignore it, exactly as they do for a number nobody defines.
 #[test]
 fn a_21_only_message_type_follows_the_unknown_type_rule_on_older_versions() {
     for message_type in [5, 6] {
@@ -1501,9 +1494,10 @@ fn a_21_only_message_type_follows_the_unknown_type_rule_on_older_versions() {
         let mut middle = booted_station(Version::V2_0_1);
         middle.handle(NOW, Input::Received(&frame));
         recorder.drain(&mut middle);
-        assert!(
-            recorder.only_frame().contains("MessageTypeNotSupported"),
-            "2.0.1 §4.4 answers type {message_type}: {:?}",
+        assert_eq!(
+            recorder.frames().len(),
+            0,
+            "2.0.1 §4.1 ignores type {message_type}: {:?}",
             recorder.frames()
         );
     }

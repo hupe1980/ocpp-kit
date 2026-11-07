@@ -9,7 +9,7 @@
 //! | | 1.6J | 2.0.1 | 2.1 |
 //! |---|---|---|---|
 //! | Message types | 2, 3, 4 | 2, 3, 4 | + 5 (`CALLRESULTERROR`), 6 (`SEND`) |
-//! | Unknown message type number | ignore the payload (§4.1.3) | answer `MessageTypeNotSupported` (§4.4) | ignore the payload (§4.4) |
+//! | Unknown message type number | ignore the message (§4.1.3) | ignore the message (§4.1, edition 4 errata) | ignore the message (§4.1) |
 //! | Unreadable `MessageId` | no rule | answer with id `"-1"` | answer with id `"-1"` |
 //! | "Syntactically incorrect" | `FormationViolation` | `FormatViolation` | `FormatViolation` |
 //! | Occurrence violation | `OccurenceConstraintViolation` | `OccurrenceConstraintViolation` | `OccurrenceConstraintViolation` |
