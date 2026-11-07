@@ -471,7 +471,7 @@ mod tests {
         // With no request, everything declared is reported.
         let (all, unknown) = config.report(&[]);
         assert_eq!(all.len(), config.len());
-        assert!(unknown.is_empty());
+        assert!(unknown.is_empty(), "{unknown:?}");
     }
 
     #[test]
@@ -479,7 +479,7 @@ mod tests {
         let mut config = ConfigurationKeys::with_defaults();
         config.remove("ReserveConnectorZeroSupported");
         let (known, unknown) = config.report(&["ReserveConnectorZeroSupported"]);
-        assert!(known.is_empty());
+        assert!(known.is_empty(), "{known:?}");
         assert_eq!(unknown.len(), 1);
     }
 }

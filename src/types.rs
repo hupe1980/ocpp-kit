@@ -47,8 +47,17 @@ impl DateTime {
         Self(jiff::Timestamp::now())
     }
 
-    /// Parses an RFC 3339 timestamp. The offset is mandatory.
+    /// Parses an RFC 3339 timestamp. The offset is mandatory, and so is the `T` between date
+    /// and time: RFC 3339's `date-time` grammar — which the schemas' `format` names — has no
+    /// other separator. A space is a [`DateTimeLeniency::AllowSpace`] repair.
+    ///
+    /// [`DateTimeLeniency::AllowSpace`]: crate::decode::DateTimeLeniency::AllowSpace
     pub fn parse(text: &str) -> Result<Self, DateTimeError> {
+        if !matches!(text.as_bytes().get(10), Some(b'T' | b't')) {
+            return Err(DateTimeError {
+                input: text.to_owned(),
+            });
+        }
         jiff::Timestamp::from_str(text)
             .map(Self)
             .map_err(|_| DateTimeError {
@@ -135,7 +144,7 @@ impl<'de> Deserialize<'de> for DateTime {
             type Value = DateTime;
 
             fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str("an RFC 3339 date-time with an offset")
+                f.write_str("an RFC 3339 date-time (`T` separator, explicit offset)")
             }
 
             fn visit_str<E: serde::de::Error>(self, text: &str) -> Result<DateTime, E> {
@@ -164,7 +173,7 @@ impl fmt::Display for DateTimeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{:?} is not an RFC 3339 date-time with an offset",
+            "{:?} is not an RFC 3339 date-time (`T` separator, explicit offset)",
             self.input
         )
     }
@@ -178,6 +187,99 @@ impl std::error::Error for DateTimeError {}
 // ---------------------------------------------------------------------------
 
 pub use crate::decimal::{Decimal, ParseDecimalError};
+
+// ---------------------------------------------------------------------------
+// integer
+// ---------------------------------------------------------------------------
+
+/// Deserializers for OCPP `integer` members whose schema is JSON Schema draft-06 or later.
+///
+/// From draft-06 on, `"type": "integer"` matches *any number with a zero fractional part*, so
+/// `20000.0` is a valid `integer` for every OCPP 2.0.1 and 2.1 schema (and the OCPP 1.6
+/// security-extension schemas). `serde`'s own `i32` refuses it. The generated types use these
+/// functions on exactly the members whose schema file says draft-06; the OCPP 1.6 core
+/// schemas are draft-04, where an integer is "a JSON number without a fraction or exponent
+/// part", and keep `serde`'s exact reading (a lenient decode can still repair them, see
+/// [`WholeFloats`](crate::decode::WholeFloats)).
+///
+/// A real fraction (`20000.5`) is still a type error, and a value outside `i32` is still a
+/// property error — the same classification an integer literal gets.
+#[doc(hidden)]
+pub mod integer {
+    use alloc::vec::Vec;
+    use core::fmt;
+
+    use serde::de::{self, Deserialize, Deserializer, Unexpected, Visitor};
+
+    /// One `i32` that may arrive as `20000` or `20000.0`.
+    struct Int(i32);
+
+    struct IntVisitor;
+
+    impl Visitor<'_> for IntVisitor {
+        type Value = Int;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("i32")
+        }
+
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Int, E> {
+            i32::try_from(v)
+                .map(Int)
+                .map_err(|_| E::invalid_value(Unexpected::Signed(v), &self))
+        }
+
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Int, E> {
+            i32::try_from(v)
+                .map(Int)
+                .map_err(|_| E::invalid_value(Unexpected::Unsigned(v), &self))
+        }
+
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_precision_loss,
+            clippy::float_cmp
+        )]
+        fn visit_f64<E: de::Error>(self, v: f64) -> Result<Int, E> {
+            // `f64::fract` is `std`-only; a round trip through `i64` is the `no_std` test for
+            // a zero fractional part, guarded so the cast cannot saturate.
+            let whole = v.is_finite() && v.abs() < 9.0e15 && (v as i64) as f64 == v;
+            if !whole {
+                return Err(E::invalid_type(Unexpected::Float(v), &self));
+            }
+            self.visit_i64(v as i64)
+        }
+    }
+
+    impl<'de> Deserialize<'de> for Int {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            deserializer.deserialize_any(IntVisitor)
+        }
+    }
+
+    /// A required `integer` member.
+    pub fn one<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i32, D::Error> {
+        Int::deserialize(deserializer).map(|v| v.0)
+    }
+
+    /// An optional `integer` member.
+    pub fn option<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<i32>, D::Error> {
+        Option::<Int>::deserialize(deserializer).map(|v| v.map(|v| v.0))
+    }
+
+    /// A required array of `integer`.
+    pub fn list<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<i32>, D::Error> {
+        Vec::<Int>::deserialize(deserializer).map(|v| v.into_iter().map(|v| v.0).collect())
+    }
+
+    /// An optional array of `integer`.
+    pub fn option_list<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<Vec<i32>>, D::Error> {
+        Option::<Vec<Int>>::deserialize(deserializer)
+            .map(|v| v.map(|v| v.into_iter().map(|v| v.0).collect()))
+    }
+}
 
 // ---------------------------------------------------------------------------
 // CustomData
@@ -621,6 +723,17 @@ impl IdGenerator for CounterIds {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_strict_date_time_needs_the_t_separator() {
+        assert!(DateTime::parse("2026-11-07T12:00:05Z").is_ok());
+        assert!(DateTime::parse("2026-11-07t12:00:05z").is_ok()); // RFC 3339 §5.6: case-insensitive
+        assert!(DateTime::parse("2026-11-07 12:00:05Z").is_err());
+        assert_eq!(
+            DateTime::parse_lenient("2026-11-07 12:00:05Z").unwrap(),
+            DateTime::parse("2026-11-07T12:00:05Z").unwrap()
+        );
+    }
 
     #[test]
     fn identity_rejects_colon_per_a00_fr_204() {

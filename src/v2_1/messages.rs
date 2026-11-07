@@ -28,6 +28,7 @@ pub struct AFRRSignalRequest {
     /// Time when signal becomes active.
     pub timestamp: crate::types::DateTime,
     /// Value of signal in _v2xSignalWattCurve_.
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub signal: i32,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -141,6 +142,7 @@ impl Response for AFRRSignalResponse {}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AdjustPeriodicEventStreamRequest {
     /// The `id` member.
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub id: i32,
     /// The `params` member.
     pub params: PeriodicEventStreamParams,
@@ -466,6 +468,7 @@ pub struct BatterySwapRequest {
     pub id_token: IdToken,
     /// RequestId to correlate BatteryIn/Out events and optional RequestBatterySwapRequest.
     #[serde(rename = "requestId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub request_id: i32,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -640,6 +643,7 @@ pub struct BootNotificationResponse {
     #[serde(rename = "currentTime")]
     pub current_time: crate::types::DateTime,
     /// When &lt;&lt;cmn_registrationstatusenumtype,Status&gt;&gt; is Accepted, this contains the heartbeat interval in seconds. If the CSMS returns something other than Accepted, the value of the interval field indicates the minimum wait time before sending a next BootNotification request.
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub interval: i32,
     /// The `status` member.
     pub status: RegistrationStatus,
@@ -711,6 +715,7 @@ impl Response for BootNotificationResponse {}
 pub struct CancelReservationRequest {
     /// Id of the reservation to cancel.
     #[serde(rename = "reservationId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub reservation_id: i32,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -837,6 +842,7 @@ pub struct CertificateSignedRequest {
     /// *(2.1)* RequestId to correlate this message with the SignCertificateRequest.
     #[serde(rename = "requestId")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub request_id: Option<i32>,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -1342,6 +1348,7 @@ pub struct ClearChargingProfileRequest {
     /// The Id of the charging profile to clear.
     #[serde(rename = "chargingProfileId")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub charging_profile_id: Option<i32>,
     /// The `chargingProfileCriteria` member.
     #[serde(rename = "chargingProfileCriteria")]
@@ -1621,6 +1628,7 @@ impl Response for ClearDERControlResponse {}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ClearDisplayMessageRequest {
     /// Id of the message that SHALL be removed from the Charging Station.
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub id: i32,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -1742,6 +1750,7 @@ pub struct ClearTariffsRequest {
     /// When present only clear tariffs matching _tariffIds_ at EVSE _evseId_.
     #[serde(rename = "evseId")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub evse_id: Option<i32>,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -1869,6 +1878,7 @@ impl Response for ClearTariffsResponse {}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ClearVariableMonitoringRequest {
     /// List of the monitors to be cleared, identified by there Id.
+    #[serde(deserialize_with = "crate::types::integer::list")]
     pub id: Vec<i32>,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -1983,6 +1993,7 @@ pub struct ClearedChargingLimitRequest {
     /// EVSE Identifier.
     #[serde(rename = "evseId")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub evse_id: Option<i32>,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -2092,6 +2103,7 @@ impl Response for ClearedChargingLimitResponse {}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ClosePeriodicEventStreamRequest {
     /// Id of stream to close.
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub id: i32,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -2281,6 +2293,7 @@ impl Response for CostUpdatedResponse {}
 pub struct CustomerInformationRequest {
     /// The Id of the request.
     #[serde(rename = "requestId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub request_id: i32,
     /// Flag indicating whether the Charging Station should return NotifyCustomerInformationRequest messages containing information about the customer referred to.
     pub report: bool,
@@ -2731,6 +2744,7 @@ pub struct FirmwareStatusNotificationRequest {
     /// This field is mandatory, unless the message was triggered by a TriggerMessageRequest AND there is no firmware update ongoing.
     #[serde(rename = "requestId")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub request_id: Option<i32>,
     /// The `statusInfo` member.
     #[serde(rename = "statusInfo")]
@@ -2858,6 +2872,7 @@ pub struct Get15118EVCertificateRequest {
     /// Maximum number of contracts that EV wants to install.
     #[serde(rename = "maximumContractCertificateChains")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub maximum_contract_certificate_chains: Option<i32>,
     /// *(2.1)*  Absent during ISO 15118-2 session. Optional during ISO 15118-20 session. List of EMAIDs for which contract certificates must be requested first, in case there are more certificates than allowed by _maximumContractCertificateChains_.
     #[serde(rename = "prioritizedEMAIDs")]
@@ -2979,6 +2994,7 @@ pub struct Get15118EVCertificateResponse {
     /// *(2.1)* Number of contracts that can be retrieved with additional requests.
     #[serde(rename = "remainingContracts")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub remaining_contracts: Option<i32>,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -3055,6 +3071,7 @@ impl Response for Get15118EVCertificateResponse {}
 pub struct GetBaseReportRequest {
     /// The Id of the request.
     #[serde(rename = "requestId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub request_id: i32,
     /// The `reportBase` member.
     #[serde(rename = "reportBase")]
@@ -3425,6 +3442,7 @@ impl Response for GetCertificateStatusResponse {}
 pub struct GetChargingProfilesRequest {
     /// Reference identification that is to be used by the Charging Station in the &lt;&lt;reportchargingprofilesrequest, ReportChargingProfilesRequest&gt;&gt; when provided.
     #[serde(rename = "requestId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub request_id: i32,
     /// The `chargingProfile` member.
     #[serde(rename = "chargingProfile")]
@@ -3433,6 +3451,7 @@ pub struct GetChargingProfilesRequest {
     /// Reported charging profiles SHALL match the criteria in field _chargingProfile_.
     #[serde(rename = "evseId")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub evse_id: Option<i32>,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -3562,9 +3581,11 @@ impl Response for GetChargingProfilesResponse {}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GetCompositeScheduleRequest {
     /// Length of the requested schedule in seconds.
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub duration: i32,
     /// The ID of the EVSE for which the schedule is requested. When evseid=0, the Charging Station will calculate the expected consumption for the grid connection.
     #[serde(rename = "evseId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub evse_id: i32,
     /// The `chargingRateUnit` member.
     #[serde(rename = "chargingRateUnit")]
@@ -3715,6 +3736,7 @@ impl Response for GetCompositeScheduleResponse {}
 pub struct GetDERControlRequest {
     /// RequestId to be used in ReportDERControlRequest.
     #[serde(rename = "requestId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub request_id: i32,
     /// True: get a default DER control. False: get a scheduled control.
     #[serde(rename = "isDefault")]
@@ -3874,9 +3896,11 @@ impl Response for GetDERControlResponse {}
 pub struct GetDisplayMessagesRequest {
     /// The Id of this request.
     #[serde(rename = "requestId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub request_id: i32,
     /// If provided the Charging Station shall return Display Messages of the given ids. This field SHALL NOT contain more ids than set in &lt;&lt;configkey-number-of-display-messages,NumberOfDisplayMessages.maxLimit&gt;&gt;
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option_list")]
     pub id: Option<Vec<i32>>,
     /// The `priority` member.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4238,6 +4262,7 @@ impl Confirmed for GetLocalListVersionRequest {}
 pub struct GetLocalListVersionResponse {
     /// This contains the current version number of the local authorization list in the Charging Station.
     #[serde(rename = "versionNumber")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub version_number: i32,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -4286,13 +4311,16 @@ pub struct GetLogRequest {
     pub log_type: Log,
     /// The Id of this request
     #[serde(rename = "requestId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub request_id: i32,
     /// This specifies how many times the Charging Station must retry to upload the log before giving up. If this field is not present, it is left to Charging Station to decide how many times it wants to retry. If the value is 0, it means: no retries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub retries: Option<i32>,
     /// The interval in seconds after which a retry may be attempted. If this field is not present, it is left to Charging Station to decide how long to wait between attempts.
     #[serde(rename = "retryInterval")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub retry_interval: Option<i32>,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -4451,6 +4479,7 @@ impl Response for GetLogResponse {}
 pub struct GetMonitoringReportRequest {
     /// The Id of the request.
     #[serde(rename = "requestId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub request_id: i32,
     /// The `componentVariable` member.
     #[serde(rename = "componentVariable")]
@@ -4713,6 +4742,7 @@ impl Response for GetPeriodicEventStreamResponse {}
 pub struct GetReportRequest {
     /// The Id of the request.
     #[serde(rename = "requestId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub request_id: i32,
     /// The `componentVariable` member.
     #[serde(rename = "componentVariable")]
@@ -4870,6 +4900,7 @@ impl Response for GetReportResponse {}
 pub struct GetTariffsRequest {
     /// EVSE id to get tariff from. When _evseId_ = 0, this gets tariffs from all EVSEs.
     #[serde(rename = "evseId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub evse_id: i32,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -5229,7 +5260,7 @@ impl Validate for GetVariablesResponse {
 impl Sealed for GetVariablesResponse {}
 impl Response for GetVariablesResponse {}
 
-/// Spec: OCPP 2.1 · B — Provisioning · Charging Station → CSMS · CALL.
+/// Spec: OCPP 2.1 · G — Availability · Charging Station → CSMS · CALL.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct HeartbeatRequest {
     /// The `customData` member.
@@ -5274,7 +5305,7 @@ impl Request for HeartbeatRequest {
 
 impl Confirmed for HeartbeatRequest {}
 
-/// Spec: OCPP 2.1 · B — Provisioning · Charging Station → CSMS · CALL.
+/// Spec: OCPP 2.1 · G — Availability · Charging Station → CSMS · CALL.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HeartbeatResponse {
     /// Contains the current time of the CSMS.
@@ -5448,6 +5479,7 @@ pub struct LogStatusNotificationRequest {
     /// unless the message was triggered by a TriggerMessageRequest AND there is no log upload ongoing.
     #[serde(rename = "requestId")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub request_id: Option<i32>,
     /// The `statusInfo` member.
     #[serde(rename = "statusInfo")]
@@ -5564,6 +5596,7 @@ impl Response for LogStatusNotificationResponse {}
 pub struct MeterValuesRequest {
     /// This contains a number (&gt;0) designating an EVSE of the Charging Station. ‘0’ (zero) is used to designate the main power meter.
     #[serde(rename = "evseId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub evse_id: i32,
     /// The `meterValue` member.
     #[serde(rename = "meterValue")]
@@ -5806,6 +5839,7 @@ pub struct NotifyChargingLimitRequest {
     /// The EVSE to which the charging limit is set. If absent or when zero, it applies to the entire Charging Station.
     #[serde(rename = "evseId")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub evse_id: Option<i32>,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -5930,12 +5964,14 @@ pub struct NotifyCustomerInformationRequest {
     pub data: String,
     /// Sequence number of this message. First message starts at 0.
     #[serde(rename = "seqNo")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub seq_no: i32,
     ///  Timestamp of the moment this message was generated at the Charging Station.
     #[serde(rename = "generatedAt")]
     pub generated_at: crate::types::DateTime,
     /// The Id of the request.
     #[serde(rename = "requestId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub request_id: i32,
     /// “to be continued” indicator. Indicates whether another part of the monitoringData follows in an upcoming notifyMonitoringReportRequest message. Default value when omitted is false.
     /// Schema default: `false`.
@@ -6321,6 +6357,7 @@ impl Response for NotifyDERStartStopResponse {}
 pub struct NotifyDisplayMessagesRequest {
     /// The id of the &lt;&lt;getdisplaymessagesrequest,GetDisplayMessagesRequest&gt;&gt; that requested this message.
     #[serde(rename = "requestId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub request_id: i32,
     /// The `messageInfo` member.
     #[serde(rename = "messageInfo")]
@@ -6443,6 +6480,7 @@ impl Response for NotifyDisplayMessagesResponse {}
 pub struct NotifyEVChargingNeedsRequest {
     /// Defines the EVSE and connector to which the EV is connected. EvseId may not be 0.
     #[serde(rename = "evseId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub evse_id: i32,
     /// The `chargingNeeds` member.
     #[serde(rename = "chargingNeeds")]
@@ -6452,6 +6490,7 @@ pub struct NotifyEVChargingNeedsRequest {
     /// - ISO 15118-20: PowerScheduleEntry, PriceRule and PriceLevelScheduleEntries.
     #[serde(rename = "maxScheduleTuples")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub max_schedule_tuples: Option<i32>,
     /// *(2.1)* Time when EV charging needs were received. +
     /// Field can be added when charging station was offline when charging needs were received.
@@ -6603,10 +6642,12 @@ pub struct NotifyEVChargingScheduleRequest {
     pub charging_schedule: ChargingSchedule,
     /// The charging schedule contained in this notification applies to an EVSE. EvseId must be &gt; 0.
     #[serde(rename = "evseId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub evse_id: i32,
     /// *(2.1)* Id  of the _chargingSchedule_ that EV selected from the provided ChargingProfile.
     #[serde(rename = "selectedChargingScheduleId")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub selected_charging_schedule_id: Option<i32>,
     /// *(2.1)* True when power tolerance is accepted by EV.
     /// This value is taken from EVPowerProfile.PowerToleranceAcceptance in the ISO 15118-20 PowerDeliverReq message..
@@ -6761,6 +6802,7 @@ pub struct NotifyEventRequest {
     pub generated_at: crate::types::DateTime,
     /// Sequence number of this message. First message starts at 0.
     #[serde(rename = "seqNo")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub seq_no: i32,
     /// The `eventData` member.
     #[serde(rename = "eventData")]
@@ -6881,9 +6923,11 @@ impl Response for NotifyEventResponse {}
 pub struct NotifyMonitoringReportRequest {
     /// The id of the GetMonitoringRequest that requested this report.
     #[serde(rename = "requestId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub request_id: i32,
     /// Sequence number of this message. First message starts at 0.
     #[serde(rename = "seqNo")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub seq_no: i32,
     /// Timestamp of the moment this message was generated at the Charging Station.
     #[serde(rename = "generatedAt")]
@@ -7018,8 +7062,10 @@ pub struct NotifyPeriodicEventStreamRequest {
     /// The `data` member.
     pub data: Vec<StreamDataElement>,
     /// Id of stream.
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub id: i32,
     /// Number of data elements still pending to be sent.
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub pending: i32,
     /// Base timestamp to add to time offset of values.
     pub basetime: crate::types::DateTime,
@@ -7191,12 +7237,14 @@ impl Response for NotifyPriorityChargingResponse {}
 pub struct NotifyReportRequest {
     /// The id of the GetReportRequest  or GetBaseReportRequest that requested this report
     #[serde(rename = "requestId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub request_id: i32,
     /// Timestamp of the moment this message was generated at the Charging Station.
     #[serde(rename = "generatedAt")]
     pub generated_at: crate::types::DateTime,
     /// Sequence number of this message. First message starts at 0.
     #[serde(rename = "seqNo")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub seq_no: i32,
     /// The `reportData` member.
     #[serde(rename = "reportData")]
@@ -7323,7 +7371,7 @@ impl Validate for NotifyReportResponse {
 impl Sealed for NotifyReportResponse {}
 impl Response for NotifyReportResponse {}
 
-/// Spec: OCPP 2.1 · I — Tariff and Cost · Charging Station → CSMS · CALL.
+/// Spec: OCPP 2.1 · C — Authorization · Charging Station → CSMS · CALL.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct NotifySettlementRequest {
     /// The payment reference received from the payment terminal and is used as the value for _idToken_.
@@ -7498,7 +7546,7 @@ impl Request for NotifySettlementRequest {
 
 impl Confirmed for NotifySettlementRequest {}
 
-/// Spec: OCPP 2.1 · I — Tariff and Cost · Charging Station → CSMS · CALL.
+/// Spec: OCPP 2.1 · C — Authorization · Charging Station → CSMS · CALL.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct NotifySettlementResponse {
     /// The receipt URL if receipt generated by CSMS. The Charging Station can QR encode it and show it to the EV Driver.
@@ -7567,13 +7615,15 @@ impl Validate for NotifySettlementResponse {
 impl Sealed for NotifySettlementResponse {}
 impl Response for NotifySettlementResponse {}
 
-/// Spec: OCPP 2.1 · I — Tariff and Cost · Charging Station → CSMS · CALL.
+/// Spec: OCPP 2.1 · C — Authorization · CSMS → Charging Station · CALL.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct NotifyWebPaymentStartedRequest {
     /// EVSE id for which transaction is requested.
     #[serde(rename = "evseId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub evse_id: i32,
     /// Timeout value in seconds after which no result of web payment process (e.g. QR code scanning) is to be expected anymore.
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub timeout: i32,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -7618,13 +7668,13 @@ impl Request for NotifyWebPaymentStartedRequest {
     type Action = Action;
     const ACTION: Action = Action::NotifyWebPaymentStarted;
     const KIND: MessageKind = MessageKind::Call;
-    const ORIGIN: Origin = Origin::ChargingStation;
+    const ORIGIN: Origin = Origin::Csms;
     type Response = NotifyWebPaymentStartedResponse;
 }
 
 impl Confirmed for NotifyWebPaymentStartedRequest {}
 
-/// Spec: OCPP 2.1 · I — Tariff and Cost · Charging Station → CSMS · CALL.
+/// Spec: OCPP 2.1 · C — Authorization · CSMS → Charging Station · CALL.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct NotifyWebPaymentStartedResponse {
     /// The `customData` member.
@@ -7787,12 +7837,14 @@ pub struct PublishFirmwareRequest {
     pub checksum: String,
     /// The Id of the request.
     #[serde(rename = "requestId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub request_id: i32,
     /// This specifies how many times Charging Station must retry
     /// to download the firmware before giving up. If this field is not
     /// present, it is left to Charging Station to decide how many times it wants to retry.
     /// If the value is 0, it means: no retries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub retries: Option<i32>,
     /// The interval in seconds
     /// after which a retry may be
@@ -7802,6 +7854,7 @@ pub struct PublishFirmwareRequest {
     /// between attempts.
     #[serde(rename = "retryInterval")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub retry_interval: Option<i32>,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -7961,6 +8014,7 @@ pub struct PublishFirmwareStatusNotificationRequest {
     /// triggered this action.
     #[serde(rename = "requestId")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub request_id: Option<i32>,
     /// The `statusInfo` member.
     #[serde(rename = "statusInfo")]
@@ -8100,6 +8154,7 @@ impl Response for PublishFirmwareStatusNotificationResponse {}
 pub struct PullDynamicScheduleUpdateRequest {
     /// Id of charging profile to update.
     #[serde(rename = "chargingProfileId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub charging_profile_id: i32,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -8230,6 +8285,7 @@ impl Response for PullDynamicScheduleUpdateResponse {}
 pub struct ReportChargingProfilesRequest {
     /// Id used to match the &lt;&lt;getchargingprofilesrequest, GetChargingProfilesRequest&gt;&gt; message with the resulting ReportChargingProfilesRequest messages. When the CSMS provided a requestId in the &lt;&lt;getchargingprofilesrequest, GetChargingProfilesRequest&gt;&gt;, this field SHALL contain the same value.
     #[serde(rename = "requestId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub request_id: i32,
     /// Source that has installed this charging profile. Values defined in Appendix as ChargingLimitSourceEnumStringType.
     #[serde(rename = "chargingLimitSource")]
@@ -8239,6 +8295,7 @@ pub struct ReportChargingProfilesRequest {
     pub charging_profile: Vec<ChargingProfile>,
     /// The evse to which the charging profile applies. If evseId = 0, the message contains an overall limit for the Charging Station.
     #[serde(rename = "evseId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub evse_id: i32,
     /// To Be Continued. Default value when omitted: false. false indicates that there are no further messages as part of this report.
     /// Schema default: `false`.
@@ -8367,6 +8424,7 @@ impl Response for ReportChargingProfilesResponse {}
 pub struct ReportDERControlRequest {
     /// RequestId from GetDERControlRequest.
     #[serde(rename = "requestId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub request_id: i32,
     /// The `curve` member.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -8646,6 +8704,7 @@ pub struct RequestBatterySwapRequest {
     pub id_token: IdToken,
     /// Request id to match with BatterySwapRequest.
     #[serde(rename = "requestId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub request_id: i32,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -8766,10 +8825,12 @@ pub struct RequestStartTransactionRequest {
     pub id_token: IdToken,
     /// Id given by the server to this start request. The Charging Station will return this in the &lt;&lt;transactioneventrequest, TransactionEventRequest&gt;&gt;, letting the server know which transaction was started for this request. Use to start a transaction.
     #[serde(rename = "remoteStartId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub remote_start_id: i32,
     /// Number of the EVSE on which to start the transaction. EvseId SHALL be &gt; 0
     #[serde(rename = "evseId")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub evse_id: Option<i32>,
     /// The `groupIdToken` member.
     #[serde(rename = "groupIdToken")]
@@ -9067,6 +9128,7 @@ impl Response for RequestStopTransactionResponse {}
 pub struct ReservationStatusUpdateRequest {
     /// The ID of the reservation.
     #[serde(rename = "reservationId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub reservation_id: i32,
     /// The `reservationUpdateStatus` member.
     #[serde(rename = "reservationUpdateStatus")]
@@ -9164,6 +9226,7 @@ impl Response for ReservationStatusUpdateResponse {}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ReserveNowRequest {
     /// Id of reservation.
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub id: i32,
     /// Date and time at which the reservation expires.
     #[serde(rename = "expiryDateTime")]
@@ -9178,6 +9241,7 @@ pub struct ReserveNowRequest {
     /// This contains ID of the evse to be reserved.
     #[serde(rename = "evseId")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub evse_id: Option<i32>,
     /// The `groupIdToken` member.
     #[serde(rename = "groupIdToken")]
@@ -9349,6 +9413,7 @@ pub struct ResetRequest {
     /// This contains the ID of a specific EVSE that needs to be reset, instead of the entire Charging Station.
     #[serde(rename = "evseId")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub evse_id: Option<i32>,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -9588,6 +9653,7 @@ impl Response for SecurityEventNotificationResponse {}
 pub struct SendLocalListRequest {
     /// In case of a full update this is the version number of the full list. In case of a differential update it is the version number of the list after the update has been applied.
     #[serde(rename = "versionNumber")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub version_number: i32,
     /// The `updateType` member.
     #[serde(rename = "updateType")]
@@ -9730,6 +9796,7 @@ impl Response for SendLocalListResponse {}
 pub struct SetChargingProfileRequest {
     /// For TxDefaultProfile an evseId=0 applies the profile to each individual evse. For ChargingStationMaxProfile and ChargingStationExternalConstraints an evseId=0 contains an overal limit for the whole Charging Station.
     #[serde(rename = "evseId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub evse_id: i32,
     /// The `chargingProfile` member.
     #[serde(rename = "chargingProfile")]
@@ -10139,6 +10206,7 @@ impl Response for SetDERControlResponse {}
 pub struct SetDefaultTariffRequest {
     /// EVSE that tariff applies to. When _evseId_ = 0, then tarriff applies to all EVSEs.
     #[serde(rename = "evseId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub evse_id: i32,
     /// The `tariff` member.
     pub tariff: Tariff,
@@ -10514,6 +10582,7 @@ pub struct SetMonitoringLevelRequest {
     /// Indicates a regular operational event. May be used for reporting, measuring throughput, etc. No action is required. +
     /// *9-Debug* +
     /// Indicates information useful to developers for debugging, not useful during operations.
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub severity: i32,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -10630,6 +10699,7 @@ impl Response for SetMonitoringLevelResponse {}
 pub struct SetNetworkProfileRequest {
     /// Slot in which the configuration should be stored.
     #[serde(rename = "configurationSlot")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub configuration_slot: i32,
     /// The `connectionData` member.
     #[serde(rename = "connectionData")]
@@ -10981,6 +11051,7 @@ pub struct SignCertificateRequest {
     /// *(2.1)* RequestId to match this message with the CertificateSignedRequest.
     #[serde(rename = "requestId")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub request_id: Option<i32>,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -11136,9 +11207,11 @@ pub struct StatusNotificationRequest {
     pub connector_status: ConnectorStatus,
     /// The id of the EVSE to which the connector belongs for which the the status is reported.
     #[serde(rename = "evseId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub evse_id: i32,
     /// The id of the connector within the EVSE for which the status is reported.
     #[serde(rename = "connectorId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub connector_id: i32,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -11252,6 +11325,7 @@ pub struct TransactionEventRequest {
     pub trigger_reason: TriggerReason,
     /// Incremental sequence number, helps with determining if all messages of a transaction have been received.
     #[serde(rename = "seqNo")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub seq_no: i32,
     /// The `transactionInfo` member.
     #[serde(rename = "transactionInfo")]
@@ -11274,14 +11348,17 @@ pub struct TransactionEventRequest {
     /// 2: The number of phases provided via device management.
     #[serde(rename = "numberOfPhasesUsed")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub number_of_phases_used: Option<i32>,
     /// The maximum current of the connected cable in Ampere (A).
     #[serde(rename = "cableMaxCurrent")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub cable_max_current: Option<i32>,
     /// This contains the Id of the reservation that terminates as a result of this transaction.
     #[serde(rename = "reservationId")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub reservation_id: Option<i32>,
     /// The `preconditioningStatus` member.
     #[serde(rename = "preconditioningStatus")]
@@ -11495,6 +11572,7 @@ pub struct TransactionEventResponse {
     /// Priority from a business point of view. Default priority is 0, The range is from -9 to 9. Higher values indicate a higher priority. The chargingPriority in &lt;&lt;transactioneventresponse,TransactionEventResponse&gt;&gt; is temporarily, so it may not be set in the &lt;&lt;cmn_idtokeninfotype,IdTokenInfoType&gt;&gt; afterwards. Also the chargingPriority in &lt;&lt;transactioneventresponse,TransactionEventResponse&gt;&gt; has a higher priority than the one in &lt;&lt;cmn_idtokeninfotype,IdTokenInfoType&gt;&gt;.
     #[serde(rename = "chargingPriority")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub charging_priority: Option<i32>,
     /// The `idTokenInfo` member.
     #[serde(rename = "idTokenInfo")]
@@ -11767,9 +11845,11 @@ impl Response for TriggerMessageResponse {}
 pub struct UnlockConnectorRequest {
     /// This contains the identifier of the EVSE for which a connector needs to be unlocked.
     #[serde(rename = "evseId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub evse_id: i32,
     /// This contains the identifier of the connector that needs to be unlocked.
     #[serde(rename = "connectorId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub connector_id: i32,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -11990,6 +12070,7 @@ impl Response for UnpublishFirmwareResponse {}
 pub struct UpdateDynamicScheduleRequest {
     /// Id of charging profile to update.
     #[serde(rename = "chargingProfileId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub charging_profile_id: i32,
     /// The `scheduleUpdate` member.
     #[serde(rename = "scheduleUpdate")]
@@ -12110,16 +12191,19 @@ impl Response for UpdateDynamicScheduleResponse {}
 pub struct UpdateFirmwareRequest {
     /// The Id of this request
     #[serde(rename = "requestId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub request_id: i32,
     /// The `firmware` member.
     pub firmware: Firmware,
     /// This specifies how many times Charging Station must retry to download the firmware before giving up. If this field is not present, it is left to Charging Station to decide how many times it wants to retry.
     /// If the value is 0, it means: no retries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub retries: Option<i32>,
     /// The interval in seconds after which a retry may be attempted. If this field is not present, it is left to Charging Station to decide how long to wait between attempts.
     #[serde(rename = "retryInterval")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub retry_interval: Option<i32>,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -12373,7 +12457,7 @@ impl Validate for UsePriorityChargingResponse {
 impl Sealed for UsePriorityChargingResponse {}
 impl Response for UsePriorityChargingResponse {}
 
-/// Spec: OCPP 2.1 · I — Tariff and Cost · Charging Station → CSMS · CALL.
+/// Spec: OCPP 2.1 · C — Authorization · Charging Station → CSMS · CALL.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct VatNumberValidationRequest {
     /// VAT number to check.
@@ -12382,6 +12466,7 @@ pub struct VatNumberValidationRequest {
     /// EVSE id for which check is done
     #[serde(rename = "evseId")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub evse_id: Option<i32>,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -12444,7 +12529,7 @@ impl Request for VatNumberValidationRequest {
 
 impl Confirmed for VatNumberValidationRequest {}
 
-/// Spec: OCPP 2.1 · I — Tariff and Cost · Charging Station → CSMS · CALL.
+/// Spec: OCPP 2.1 · C — Authorization · Charging Station → CSMS · CALL.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct VatNumberValidationResponse {
     /// VAT number that was requested.
@@ -12462,6 +12547,7 @@ pub struct VatNumberValidationResponse {
     /// EVSE id for which check was requested.
     #[serde(rename = "evseId")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub evse_id: Option<i32>,
     /// The `customData` member.
     #[serde(rename = "customData")]

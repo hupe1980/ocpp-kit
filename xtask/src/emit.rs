@@ -58,6 +58,22 @@ fn arg_ty(t: &Typed) -> (String, &'static str) {
     }
 }
 
+/// The `crate::types::integer` deserializer an integer field needs when its schema's draft
+/// counts `20000.0` as an integer, or `None` when serde's own `i32` is already exact.
+fn whole_float_integer(f: &crate::model::Field) -> Option<&'static str> {
+    let list = match &f.typed.ty {
+        Ty::Int if f.typed.c.whole_floats => false,
+        Ty::List(inner) if inner.ty == Ty::Int && inner.c.whole_floats => true,
+        _ => return None,
+    };
+    Some(match (list, f.required) {
+        (false, true) => "one",
+        (false, false) => "option",
+        (true, true) => "list",
+        (true, false) => "option_list",
+    })
+}
+
 fn field_ty(f: &crate::model::Field) -> String {
     let base = rust_ty(&f.typed);
     if f.required {
@@ -175,6 +191,12 @@ fn render_struct(def: &StructDef, spec: Option<&str>) -> String {
         }
         if !f.required {
             out.push_str("    #[serde(default, skip_serializing_if = \"Option::is_none\")]\n");
+        }
+        if let Some(with) = whole_float_integer(f) {
+            let _ = writeln!(
+                out,
+                "    #[serde(deserialize_with = \"crate::types::integer::{with}\")]"
+            );
         }
         let _ = writeln!(out, "    pub {}: {},", f.rust, field_ty(f));
     }
@@ -660,6 +682,24 @@ fn union(name: &str, doc: &str, msgs: &[&MessageDef], kase: Kase) -> String {
         "            other => return Err(DecodeError::unsupported_action(other.as_str())),\n        })\n    }\n\n",
     );
 
+    if kase == Kase::Request {
+        out.push_str(
+            "    /// [`decode`](Self::decode), also returning every [`Repair`](crate::decode::Repair)\n    /// the lenient options applied.\n    pub fn decode_reporting(\n        action: Action,\n        payload: &RawValue,\n        options: &DecodeOptions,\n    ) -> Result<crate::decode::Decoded<Self>, DecodeError> {\n        Ok(match action {\n",
+        );
+        for m in &members {
+            let _ = writeln!(
+                out,
+                "            Action::{} => crate::decode::decode_payload_reporting::<{}>(payload, options)?.map(Self::{}),",
+                m.variant,
+                payload(m),
+                m.variant
+            );
+        }
+        out.push_str(
+            "            other => return Err(DecodeError::unsupported_action(other.as_str())),\n        })\n    }\n\n",
+        );
+    }
+
     out.push_str("    /// Serializes the payload object (without the OCPP-J frame).\n    pub fn to_json(&self) -> Result<alloc::string::String, serde_json::Error> {\n        match self {\n");
     for m in &members {
         let _ = writeln!(
@@ -691,6 +731,14 @@ fn union(name: &str, doc: &str, msgs: &[&MessageDef], kase: Kase) -> String {
         );
     }
     out.push_str("        }\n    }\n}\n\n");
+
+    if kase == Kase::Request {
+        let _ = writeln!(out, "impl crate::message::Sealed for {name} {{}}\n");
+        let _ = writeln!(
+            out,
+            "impl crate::message::DecodeRequest for {name} {{\n    type Action = Action;\n\n    fn decode_reporting(\n        action: Action,\n        payload: &RawValue,\n        options: &DecodeOptions,\n    ) -> Result<crate::decode::Decoded<Self>, DecodeError> {{\n        {name}::decode_reporting(action, payload, options)\n    }}\n}}\n"
+        );
+    }
     out
 }
 

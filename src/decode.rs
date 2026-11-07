@@ -75,6 +75,22 @@ pub enum NumericStrings {
     Coerce,
 }
 
+/// How to treat a whole number written with a fraction (`20000.0`) where the schema says
+/// `integer` *and* the schema's own draft does not count it as one.
+///
+/// Only the OCPP 1.6 core schemas are affected: they are JSON Schema draft-04, where an
+/// integer is "a JSON number without a fraction or exponent part". From draft-06 on —
+/// every OCPP 2.0.1 and 2.1 schema, and the 1.6 security extensions — `20000.0` *is* an
+/// integer, and the generated types accept it in every mode.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WholeFloats {
+    /// Fail with [`DecodeErrorKind::Type`], as draft-04 requires.
+    #[default]
+    Reject,
+    /// Rewrite them as integers. A real fraction (`20000.5`) is never rewritten.
+    Coerce,
+}
+
 /// Decoding policy. The strict default is exactly what the specification requires.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -87,6 +103,8 @@ pub struct DecodeOptions {
     pub datetime: DateTimeLeniency,
     /// Numbers sent as strings.
     pub numeric_strings: NumericStrings,
+    /// Whole numbers written as `20000.0` where a draft-04 schema says `integer`.
+    pub whole_floats: WholeFloats,
     /// Upper bound on one *payload*, in bytes — the fourth element of a `CALL`, not the
     /// whole frame.
     ///
@@ -115,6 +133,7 @@ impl DecodeOptions {
             unknown_fields: UnknownFields::Ignore,
             datetime: DateTimeLeniency::Strict,
             numeric_strings: NumericStrings::Reject,
+            whole_floats: WholeFloats::Reject,
             max_payload_size: 1024 * 1024,
             max_repairs: 32,
         }
@@ -133,8 +152,8 @@ impl DecodeOptions {
     }
 
     /// The knobs field devices actually need: undefined enum values and members are kept,
-    /// offset-less and space-separated timestamps are accepted, and numeric strings are
-    /// coerced.
+    /// offset-less and space-separated timestamps are accepted, numeric strings are coerced,
+    /// and `20000.0` is accepted for a 1.6 `integer`.
     #[must_use]
     pub const fn lenient() -> Self {
         Self {
@@ -142,6 +161,7 @@ impl DecodeOptions {
             unknown_fields: UnknownFields::Ignore,
             datetime: DateTimeLeniency::AllowSpace,
             numeric_strings: NumericStrings::Coerce,
+            whole_floats: WholeFloats::Coerce,
             max_payload_size: 1024 * 1024,
             max_repairs: 32,
         }
@@ -154,8 +174,52 @@ impl DecodeOptions {
         self
     }
 
+    /// Sets how undefined enumeration values are treated.
+    #[must_use]
+    pub const fn with_unknown_enum_values(mut self, policy: UnknownEnumValues) -> Self {
+        self.unknown_enum_values = policy;
+        self
+    }
+
+    /// Sets how undefined members are treated.
+    #[must_use]
+    pub const fn with_unknown_fields(mut self, policy: UnknownFields) -> Self {
+        self.unknown_fields = policy;
+        self
+    }
+
+    /// Sets which `dateTime` spellings are accepted.
+    #[must_use]
+    pub const fn with_datetime(mut self, policy: DateTimeLeniency) -> Self {
+        self.datetime = policy;
+        self
+    }
+
+    /// Sets how numbers sent as strings are treated.
+    #[must_use]
+    pub const fn with_numeric_strings(mut self, policy: NumericStrings) -> Self {
+        self.numeric_strings = policy;
+        self
+    }
+
+    /// Sets how `20000.0` is treated where a draft-04 schema says `integer`.
+    #[must_use]
+    pub const fn with_whole_floats(mut self, policy: WholeFloats) -> Self {
+        self.whole_floats = policy;
+        self
+    }
+
+    /// Sets the maximum number of leniency repairs applied to one payload.
+    #[must_use]
+    pub const fn with_max_repairs(mut self, repairs: usize) -> Self {
+        self.max_repairs = repairs;
+        self
+    }
+
     fn repairs_enabled(&self) -> bool {
-        self.datetime != DateTimeLeniency::Strict || self.numeric_strings == NumericStrings::Coerce
+        self.datetime != DateTimeLeniency::Strict
+            || self.numeric_strings == NumericStrings::Coerce
+            || self.whole_floats == WholeFloats::Coerce
     }
 }
 
@@ -237,14 +301,94 @@ impl fmt::Display for DecodeError {
 #[cfg(feature = "std")]
 impl std::error::Error for DecodeError {}
 
+/// One thing a lenient decode forgave, and where.
+///
+/// The repair loop knows exactly which member it rewrote; this is that knowledge, kept. A
+/// counter per [`RepairKind`] and station is what turns "this fleet is tolerated" into "this
+/// fleet sends timestamps without an offset, 40 000 times a day" — the sentence an operator
+/// takes back to the vendor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Repair {
+    /// RFC 6901 pointer to the member, e.g. `/meterValue/0/timestamp`.
+    pub pointer: String,
+    /// What was wrong with it.
+    pub kind: RepairKind,
+}
+
+/// The kinds of non-conformance leniency forgives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[non_exhaustive]
+pub enum RepairKind {
+    /// A number sent as a JSON string (`"42"`), coerced ([`NumericStrings::Coerce`]).
+    NumericString,
+    /// A `dateTime` without a UTC offset, read as UTC ([`DateTimeLeniency::AllowNaive`]).
+    DateTimeWithoutOffset,
+    /// A `dateTime` with a space instead of `T` ([`DateTimeLeniency::AllowSpace`]).
+    DateTimeWithSpace,
+    /// `20000.0` where a draft-04 schema says `integer` ([`WholeFloats::Coerce`]).
+    WholeFloat,
+    /// An enumeration value the schema does not define, kept in `UnknownValue`
+    /// ([`UnknownEnumValues::Preserve`]).
+    UnknownEnumValue,
+}
+
+impl RepairKind {
+    /// A stable, lower-case name, suitable as a metric label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            RepairKind::NumericString => "numeric_string",
+            RepairKind::DateTimeWithoutOffset => "datetime_without_offset",
+            RepairKind::DateTimeWithSpace => "datetime_with_space",
+            RepairKind::WholeFloat => "whole_float",
+            RepairKind::UnknownEnumValue => "unknown_enum_value",
+        }
+    }
+}
+
+impl fmt::Display for RepairKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// A decoded payload, and what had to be forgiven to decode it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Decoded<T> {
+    /// The payload.
+    pub value: T,
+    /// Empty for a conforming payload — which costs one strict parse and no allocation.
+    pub repairs: Vec<Repair>,
+}
+
+impl<T> Decoded<T> {
+    /// Maps the value, keeping the repairs.
+    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Decoded<U> {
+        Decoded {
+            value: f(self.value),
+            repairs: self.repairs,
+        }
+    }
+}
+
 /// Decodes and validates one payload according to `options`.
 ///
 /// Used by the generated `CsRequest::decode` / `CsmsRequest::decode` dispatchers, and usable
-/// directly when the action is known statically.
+/// directly when the action is known statically. [`decode_payload_reporting`] is the same, and
+/// also says what leniency forgave.
 pub fn decode_payload<T: DeserializeOwned + serde::Serialize + Validate>(
     payload: &RawValue,
     options: &DecodeOptions,
 ) -> Result<T, DecodeError> {
+    decode_payload_reporting(payload, options).map(|decoded| decoded.value)
+}
+
+/// [`decode_payload`], also returning every [`Repair`] the lenient options applied.
+pub fn decode_payload_reporting<T: DeserializeOwned + serde::Serialize + Validate>(
+    payload: &RawValue,
+    options: &DecodeOptions,
+) -> Result<Decoded<T>, DecodeError> {
+    let mut repairs = Vec::new();
     let text = payload.get();
     if text.len() > options.max_payload_size {
         return Err(DecodeError::new(
@@ -268,7 +412,9 @@ pub fn decode_payload<T: DeserializeOwned + serde::Serialize + Validate>(
 
     let value: T = match parse(text) {
         Ok(value) => value,
-        Err(error) if options.repairs_enabled() => repair_and_parse(text, options, &error)?,
+        Err(error) if options.repairs_enabled() => {
+            repair_and_parse(text, options, &error, &mut repairs)?
+        }
         Err(error) => return Err(error),
     };
 
@@ -283,15 +429,25 @@ pub fn decode_payload<T: DeserializeOwned + serde::Serialize + Validate>(
     }
 
     let mut violations = match value.validate() {
-        Ok(()) => return Ok(value),
+        Ok(()) => return Ok(Decoded { value, repairs }),
         Err(violations) => violations,
     };
     if options.unknown_enum_values == UnknownEnumValues::Preserve {
+        repairs.extend(
+            violations
+                .as_slice()
+                .iter()
+                .filter(|v| v.kind == ViolationKind::UnknownEnumValue)
+                .map(|v| Repair {
+                    pointer: v.path.clone(),
+                    kind: RepairKind::UnknownEnumValue,
+                }),
+        );
         violations.retain_kinds(|kind| kind != ViolationKind::UnknownEnumValue);
     }
     match violations.first() {
         Some(violation) => Err(DecodeError::from_violation(violation)),
-        None => Ok(value),
+        None => Ok(Decoded { value, repairs }),
     }
 }
 
@@ -379,15 +535,20 @@ fn repair_and_parse<T: DeserializeOwned>(
     text: &str,
     options: &DecodeOptions,
     first: &DecodeError,
+    repairs: &mut Vec<Repair>,
 ) -> Result<T, DecodeError> {
     let mut json: serde_json::Value = serde_json::from_str(text)
         .map_err(|error| DecodeError::new(DecodeErrorKind::Format, "", error.to_string()))?;
 
     let mut error = first.clone();
     for _ in 0..options.max_repairs {
-        if !apply_repair(&mut json, &error, options) {
+        let Some(kind) = apply_repair(&mut json, &error, options) else {
             return Err(error);
-        }
+        };
+        repairs.push(Repair {
+            pointer: error.path.clone(),
+            kind,
+        });
         match serde_path_to_error::deserialize::<_, T>(&json) {
             Ok(value) => return Ok(value),
             Err(next) => {
@@ -402,24 +563,34 @@ fn repair_and_parse<T: DeserializeOwned>(
     Err(error)
 }
 
-/// Rewrites the single member `error` points at. Returns `false` when no repair applies.
+/// Rewrites the single member `error` points at, and says what kind of repair it was.
+/// Returns `None` when no repair applies.
 fn apply_repair(
     json: &mut serde_json::Value,
     error: &DecodeError,
     options: &DecodeOptions,
-) -> bool {
-    let Some(slot) = pointer_mut(json, &error.path) else {
-        return false;
-    };
-    let Some(text) = slot.as_str().map(ToOwned::to_owned) else {
-        return false;
-    };
+) -> Option<RepairKind> {
+    let slot = pointer_mut(json, &error.path)?;
+
+    // `20000.0` where a draft-04 schema says `integer`.
+    if options.whole_floats == WholeFloats::Coerce && error.kind == DecodeErrorKind::Type {
+        if let Some(whole) = slot
+            .as_f64()
+            .filter(|_| slot.is_f64())
+            .and_then(whole_number)
+        {
+            *slot = serde_json::Value::from(whole);
+            return Some(RepairKind::WholeFloat);
+        }
+    }
+
+    let text = slot.as_str().map(ToOwned::to_owned)?;
 
     // A number that arrived as a string.
     if options.numeric_strings == NumericStrings::Coerce && error.kind == DecodeErrorKind::Type {
         if let Ok(number) = text.parse::<serde_json::Number>() {
             *slot = serde_json::Value::Number(number);
-            return true;
+            return Some(RepairKind::NumericString);
         }
     }
 
@@ -427,15 +598,29 @@ fn apply_repair(
     if options.datetime != DateTimeLeniency::Strict && error.kind == DecodeErrorKind::Property {
         let allow_space = options.datetime == DateTimeLeniency::AllowSpace;
         if !allow_space && text.contains(' ') {
-            return false;
+            return None;
         }
         let normalized = crate::types::normalize_datetime(&text);
         if normalized != text && crate::types::DateTime::parse(&normalized).is_ok() {
             *slot = serde_json::Value::String(normalized);
-            return true;
+            return Some(if text.contains(' ') {
+                RepairKind::DateTimeWithSpace
+            } else {
+                RepairKind::DateTimeWithoutOffset
+            });
         }
     }
-    false
+    None
+}
+
+/// `Some(n)` when `v` is a finite whole number that fits an `i64` exactly.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::float_cmp,
+    clippy::cast_precision_loss
+)]
+fn whole_number(v: f64) -> Option<i64> {
+    (v.is_finite() && v.abs() < 9.0e15 && (v as i64) as f64 == v).then_some(v as i64)
 }
 
 /// Resolves an RFC 6901 pointer to a mutable slot.

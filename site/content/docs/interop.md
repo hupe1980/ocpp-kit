@@ -25,6 +25,21 @@ let lenient = DecodeOptions::lenient();   // what field devices actually send
 | `unknown_fields` | `Ignore` | `Ignore` (`pedantic()` rejects) |
 | `datetime` | offset required | a missing offset means UTC; a space may replace `T` |
 | `numeric_strings` | `Reject` | `"42"` is coerced where a number belongs |
+| `whole_floats` | `Reject` | `20000.0` is accepted where a **1.6 core** schema says `integer` |
+
+`20000.0` for an `integer` is not leniency in 2.0.1 and 2.1: their schemas are JSON Schema
+draft-06, where any number with a zero fractional part *is* an integer, so every mode accepts
+it there. Only the OCPP 1.6 core schemas are draft-04, which says otherwise. A real fraction
+(`20000.5`) is a `TypeConstraintViolation` in every mode.
+
+Each knob has a `with_*` setter, so a policy can start from a preset and change one thing:
+
+```rust
+use ocpp_kit::decode::{DecodeOptions, UnknownEnumValues};
+
+let options = DecodeOptions::strict().with_unknown_enum_values(UnknownEnumValues::Preserve);
+assert_eq!(options.unknown_enum_values, UnknownEnumValues::Preserve);
+```
 
 ```rust
 use ocpp_kit::decode::{DecodeOptions, decode_payload};
@@ -50,6 +65,36 @@ when it fails is the offending member — identified by its JSON pointer — rew
 parse retried, up to `max_repairs` times. A conforming payload therefore costs exactly one
 strict parse, and a payload that cannot be repaired fails with the same precise error it would
 have failed with in strict mode.
+
+## Leniency is reported
+
+A lenient decode that had to forgive something says what, and where — so a fleet's
+non-conformance is something an operator can count and take back to the vendor.
+
+```rust
+use ocpp_kit::decode::{DecodeOptions, RepairKind, decode_payload_reporting};
+use ocpp_kit::{RawValue, v2_1};
+
+let payload = RawValue::from_string(
+    r#"{"reason":"PowerUp","chargingStation":{"model":"M1","vendorName":"ACME"},"extra":1}"#.into(),
+).unwrap();
+let decoded =
+    decode_payload_reporting::<v2_1::BootNotificationRequest>(&payload, &DecodeOptions::lenient())
+        .unwrap();
+assert!(decoded.repairs.is_empty()); // conforming (an ignored extra member is not a repair)
+
+let payload = RawValue::from_string(
+    r#"{"reason":"SolarFlare","chargingStation":{"model":"M1","vendorName":"ACME"}}"#.into(),
+).unwrap();
+let decoded =
+    decode_payload_reporting::<v2_1::BootNotificationRequest>(&payload, &DecodeOptions::lenient())
+        .unwrap();
+assert_eq!(decoded.repairs[0].pointer, "/reason");
+assert_eq!(decoded.repairs[0].kind, RepairKind::UnknownEnumValue);
+```
+
+In a transport handler `ctx.decode` does this for you and publishes the repairs; a CSMS sees
+them for its whole fleet as `SessionEvent::Repaired` ([Transport](@/docs/transport.md)).
 
 ## Per-station quirk profiles
 

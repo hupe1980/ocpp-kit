@@ -1,0 +1,90 @@
+name: Fuzz
+
+# The fuzz targets are *built* by ci.yml on every push. This workflow *runs* them: weekly, for a
+# fixed budget per target, starting from the committed seed corpus in fuzz/corpus/<target>/.
+# A crash fails the job and uploads the input; copy it to tests/data/fuzz-regressions/<target>/
+# and `cargo test --test fuzz_regressions` reproduces it on stable until it is fixed.
+
+on:
+  schedule:
+    - cron: "41 2 * * 6" # weekly, Saturday night: a long run nobody waits on
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: "Budget per target, in seconds"
+        required: false
+        default: "1200"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+  # 20 minutes per target unless a manual run asks for something else.
+  BUDGET: ${{ github.event.inputs.seconds || '1200' }}
+
+jobs:
+  fuzz:
+    name: fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [engine, frame, payload, websocket]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      # `taiki-e/install-action` has no cargo-fuzz manifest, so it is built here and cached.
+      - run: cargo install cargo-fuzz --locked
+      - name: run ${{ matrix.target }} for ${{ env.BUDGET }}s
+        run: |
+          set -o pipefail
+          # The committed corpus is the starting point; new inputs land in a scratch
+          # directory so the checkout stays what was committed.
+          mkdir -p grown
+          cargo fuzz run ${{ matrix.target }} grown fuzz/corpus/${{ matrix.target }} -- \
+            -max_total_time="$BUDGET" -timeout=10 -rss_limit_mb=2048 -print_final_stats=1 \
+            2>&1 | tee fuzz.log
+      - name: summary
+        if: always()
+        run: |
+          {
+            echo "### \`${{ matrix.target }}\` — ${BUDGET}s budget"
+            echo '```'
+            grep -E '^stat::|^#[0-9]+.*DONE' fuzz.log || true
+            echo '```'
+            echo "Grown corpus: $(ls grown 2>/dev/null | wc -l) new input(s)"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: upload crash
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: |
+            fuzz/artifacts/${{ matrix.target }}/
+            fuzz.log
+          if-no-files-found: ignore
+      # New coverage is offered back, minimised, for a maintainer to commit if it is worth it.
+      - name: minimise grown corpus
+        if: success()
+        run: |
+          mkdir -p minimised
+          cargo fuzz run ${{ matrix.target }} minimised fuzz/corpus/${{ matrix.target }} grown -- -merge=1
+      - name: upload grown corpus
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-corpus-${{ matrix.target }}
+          path: minimised/
+          retention-days: 14
+          if-no-files-found: ignore

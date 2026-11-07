@@ -601,6 +601,19 @@ impl Endpoint {
                 endpoint.url
             )));
         }
+        let offered = profile
+            .versions
+            .as_ref()
+            .unwrap_or(default_versions)
+            .offered();
+        if security == SecurityProfile::Unsecured
+            && offered.iter().any(|v| *v != crate::version::Version::V1_6)
+        {
+            return Err(TransportError::Configuration(format!(
+                "configuration slot {slot}: {security} is OCPP 1.6 only — 2.x requires HTTP \
+                 Basic at least (A00.FR.202); offer only 1.6, or use profile 1"
+            )));
+        }
         if security.uses_basic_auth() && profile.password.is_none() {
             return Err(TransportError::Configuration(format!(
                 "configuration slot {slot}: {security} needs a password"

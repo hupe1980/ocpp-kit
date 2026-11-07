@@ -1,6 +1,6 @@
 +++
 title = "Tokio transport"
-description = "Charging Station, CSMS and Local Controller over Tokio: subprotocol negotiation, security profiles 1-3, network configuration slots, failover and reconnect back-off."
+description = "Charging Station, CSMS and Local Controller over Tokio: subprotocol negotiation, security profiles 0-3, network configuration slots, failover and reconnect back-off."
 weight = 50
 +++
 
@@ -245,9 +245,7 @@ impl Handler for MyStation {
         request: IncomingRequest,
     ) -> BoxFuture<'_, Result<Box<RawValue>, CallError>> {
         Box::pin(async move {
-            let action = v2_1::Action::from_wire(&request.action)
-                .ok_or_else(|| CallError::not_implemented(&request.action))?;
-            match v2_1::CsmsRequest::decode(action, &request.payload, ctx.decode_options())? {
+            match ctx.decode::<v2_1::CsmsRequest>(&request)? {
                 v2_1::CsmsRequest::Reset(_) => {
                     // `ctx.handle()` can call the peer back from inside a handler: reverse
                     // calls are queued by the engine, so this cannot deadlock.
@@ -263,3 +261,33 @@ impl Handler for MyStation {
 Returning `Err` sends a `CALLERROR` with the code your `CallError` names — and a decoding
 failure converts into the *right* code automatically, because `CallError: From<DecodeError>`.
 A `SEND` is dispatched to the same handler and whatever it returns is discarded (FR.07).
+
+`ctx.decode` uses the peer's configured `DecodeOptions`, and when leniency had to forgive
+something it says so: an `Event::Repaired` on the session, carrying each member's JSON pointer
+and `RepairKind`. Responses that `Handle::call` decodes report the same way.
+
+### Watching a fleet
+
+`CsmsHandle::events()` is one stream for every station. Besides `Opened`, `Closed`,
+`Superseded` and `Refused`, it carries each session's protocol violations and repairs, tagged
+with the station:
+
+```rust,no_run
+use ocpp_kit::transport::{CsmsHandle, SessionEvent};
+
+# async fn watch(csms: CsmsHandle) {
+let mut events = csms.events();
+while let Ok(event) = events.recv().await {
+    match event {
+        SessionEvent::Repaired { identity, action, repairs, .. } => {
+            for repair in repairs {
+                // e.g. a counter `ocpp_repairs_total{station, action, kind}`
+                println!("{identity} {action} {} {}", repair.kind.as_str(), repair.pointer);
+            }
+        }
+        SessionEvent::Violation { identity, violation } => println!("{identity}: {violation:?}"),
+        _ => {}
+    }
+}
+# }
+```

@@ -126,28 +126,32 @@ reaches a handler, and comes back as the right type.
 
 ```console
 $ cargo xtask coverage --profile all
-Certification profiles (OCPP 2.0.1 Part 5)
+Certification profiles (OCPP 2.0.1 Part 5)                actions  requirements
 
-  [x] Core                           34/34
-  [x] Advanced Security              3/3
-  [x] Local Authorization List Management 3/3
-  [x] Smart Charging                 8/8
-  [x] Advanced Device Management     8/8
-  [x] Advanced User Interface        5/5
-  [x] Reservation                    3/3
-  [x] ISO 15118 support              12/12
+  [x] Core                                     34/34         34/612
+  [x] Advanced Security                          3/3          9/142
+  [x] Local Authorization List Management        3/3           2/26
+  [x] Smart Charging                             8/8           0/76
+  [x] Advanced Device Management                 8/8           0/94
+  [x] Advanced User Interface                    5/5           0/69
+  [x] Reservation                                3/3           0/28
+  [x] ISO 15118 support                        12/12          0/215
 
   76/76 action(s) driven by a scenario test
 ```
 
 An action counts only when a test names its typed payload or puts it on the wire; comments are
-stripped first, so a sentence mentioning an action is not coverage.
+stripped first, so a sentence mentioning an action is not coverage. The requirements column is
+the stricter unit a test lab uses: of the requirement ids in the profile's Part 2 use cases, how
+many the source or a test cites. `cargo xtask coverage` fails if a cited id (`E01.FR.08`) is not
+one Part 2 defines — the ids are extracted from the specification and committed, so a typo is
+a build failure, not coverage.
 
 It is still a coverage *signal*, not a certification — that is a test-lab activity against the
 OCA test tool (OCTT), which needs the tool, a licence and a running system. What this crate
 provides is the traceability that makes it tractable: every action carries its functional block,
-`cargo xtask coverage` reports which requirement ids the source and tests cite, and the engine's
-rules are individually testable.
+every cited requirement id is checked to exist, and the engine's rules are individually
+testable.
 
 ## Testing *your* code — the `testkit` feature
 

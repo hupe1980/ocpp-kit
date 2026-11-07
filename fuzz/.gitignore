@@ -1,5 +1,7 @@
-target
-corpus
-artifacts
-coverage
+# The seed corpus (corpus/) is committed on purpose; see README.md.
+target/
+artifacts/
+coverage/
 Cargo.lock
+# Raw generator output; the minimised set is committed under corpus/.
+seeds/out/

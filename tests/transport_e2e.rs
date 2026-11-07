@@ -39,9 +39,7 @@ impl Handler for CsmsSide {
         request: IncomingRequest,
     ) -> BoxFuture<'_, Result<Box<RawValue>, CallError>> {
         Box::pin(async move {
-            let action = v2_1::Action::from_wire(&request.action)
-                .ok_or_else(|| CallError::not_implemented(&request.action))?;
-            match v2_1::CsRequest::decode(action, &request.payload, ctx.decode_options())? {
+            match ctx.decode::<v2_1::CsRequest>(&request)? {
                 v2_1::CsRequest::BootNotification(_) => {
                     self.boots.fetch_add(1, Ordering::SeqCst);
                     ctx.reply(&v2_1::BootNotificationResponse::new(
@@ -62,7 +60,7 @@ impl Handler for CsmsSide {
     }
 }
 
-/// A Charging Station that answers `Reset` and nothing else.
+/// A Charging Station that answers `Reset` and `NotifyWebPaymentStarted`, and nothing else.
 struct StationSide;
 
 impl Handler for StationSide {
@@ -72,11 +70,13 @@ impl Handler for StationSide {
         request: IncomingRequest,
     ) -> BoxFuture<'_, Result<Box<RawValue>, CallError>> {
         Box::pin(async move {
-            let action = v2_1::Action::from_wire(&request.action)
-                .ok_or_else(|| CallError::not_implemented(&request.action))?;
-            match v2_1::CsmsRequest::decode(action, &request.payload, ctx.decode_options())? {
+            match ctx.decode::<v2_1::CsmsRequest>(&request)? {
                 v2_1::CsmsRequest::Reset(_) => {
                     ctx.reply(&v2_1::ResetResponse::new(v2_1::ResetStatus::Accepted))
+                }
+                // C25.FR.27: the station answers without parameters.
+                v2_1::CsmsRequest::NotifyWebPaymentStarted(_) => {
+                    ctx.reply(&v2_1::NotifyWebPaymentStartedResponse::new())
                 }
                 other => Err(CallError::not_supported(other.action().as_str())),
             }
@@ -180,6 +180,32 @@ async fn a_station_boots_and_the_csms_can_call_it_back() {
     .expect("reset did not time out")
     .expect("reset succeeded");
     assert_eq!(reset.status, v2_1::ResetStatus::Accepted);
+
+    station.shutdown(Duration::from_secs(2)).await;
+}
+
+/// C25.FR.21: the **CSMS** sends `NotifyWebPaymentStarted` after decoding a QR-code URL,
+/// and the station answers it (C25.FR.27).
+#[tokio::test]
+async fn the_csms_notifies_the_station_that_a_web_payment_started() {
+    let csms_handler = Arc::new(CsmsSide::new(v2_1::RegistrationStatus::Accepted));
+    let (port, csms) = start_csms(csms_handler, accept_all).await;
+    let station = station(port, "CS-QR01");
+    boot(&station).await;
+    assert!(station.wait_ready().await);
+
+    let identity = Identity::new("CS-QR01").unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        csms.call(&identity, v2_1::NotifyWebPaymentStartedRequest::new(1, 120)),
+    )
+    .await
+    .expect("did not time out")
+    .expect("the station answered");
+    assert_eq!(
+        v2_1::Action::NotifyWebPaymentStarted.origin(),
+        ocpp_kit::message::Origin::Csms
+    );
 
     station.shutdown(Duration::from_secs(2)).await;
 }
@@ -808,9 +834,7 @@ async fn what_the_authenticator_resolved_reaches_the_handler_and_the_handle() {
                 if seen {
                     self.0.fetch_add(1, Ordering::SeqCst);
                 }
-                let action = v2_1::Action::from_wire(&request.action)
-                    .ok_or_else(|| CallError::not_implemented(&request.action))?;
-                match v2_1::CsRequest::decode(action, &request.payload, ctx.decode_options())? {
+                match ctx.decode::<v2_1::CsRequest>(&request)? {
                     v2_1::CsRequest::BootNotification(_) => {
                         ctx.reply(&v2_1::BootNotificationResponse::new(
                             ocpp_kit::types::DateTime::now(),
@@ -875,4 +899,177 @@ async fn what_the_authenticator_resolved_reaches_the_handler_and_the_handle() {
     );
     // A type that was never stored is `None`, not a panic.
     assert!(to_station.session::<String>().is_none());
+}
+
+/// Plain OCPP-J 1.6 has no authentication; many 1.6 fleets run that way. The station sends no
+/// `Authorization` header, and the CSMS reports profile 0 rather than profile 1.
+#[tokio::test]
+async fn a_1_6_station_on_profile_0_connects_without_credentials() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (seen_tx, seen_rx) = tokio::sync::oneshot::channel();
+    let seen_tx = std::sync::Mutex::new(Some(seen_tx));
+    let csms = Csms::builder()
+        .bind(listener.local_addr().unwrap())
+        .versions([Version::V1_6])
+        .authenticate(move |auth: Auth| {
+            if let Some(tx) = seen_tx.lock().unwrap().take() {
+                let _ = tx.send((
+                    auth.profile,
+                    matches!(auth.credentials, ocpp_kit::transport::Credentials::None),
+                ));
+            }
+            async { AuthOutcome::accept() }
+        })
+        .handler(StationSide)
+        .ping_interval(None)
+        .build()
+        .unwrap();
+    tokio::spawn(async move {
+        let _ = csms.serve_on(listener).await;
+    });
+
+    let station = Station::builder()
+        .identity("CS-OPEN16")
+        .unwrap()
+        .url(format!("ws://127.0.0.1:{port}/ocpp"))
+        .versions([Version::V1_6])
+        .security_profile(SecurityProfile::Unsecured)
+        .ping_interval(None)
+        .handler(StationSide)
+        .build()
+        .unwrap()
+        .spawn()
+        .unwrap();
+
+    let (profile, no_credentials) = tokio::time::timeout(Duration::from_secs(5), seen_rx)
+        .await
+        .expect("the CSMS saw the handshake")
+        .unwrap();
+    assert_eq!(profile, SecurityProfile::Unsecured);
+    assert_eq!(profile.number(), 0);
+    assert!(no_credentials);
+    station.shutdown(Duration::from_secs(2)).await;
+}
+
+/// A00.FR.202: a 2.x station SHALL authenticate. Profile 0 offering 2.x is a configuration
+/// error, caught before anything connects.
+#[test]
+fn profile_0_is_refused_for_a_station_that_offers_2_x() {
+    let error = Station::builder()
+        .identity("CS-OPEN21")
+        .unwrap()
+        .url("ws://127.0.0.1:1/ocpp")
+        .versions([Version::V2_1, Version::V1_6])
+        .security_profile(SecurityProfile::Unsecured)
+        .handler(StationSide)
+        .build()
+        .err()
+        .expect("refused");
+    assert!(error.to_string().contains("A00.FR.202"), "{error}");
+}
+
+/// A CSMS sees what its fleet sends: a lenient decode in a handler surfaces on the fleet-wide
+/// event stream, tagged with the station, the action, the pointer and the kind.
+#[tokio::test]
+async fn repairs_reach_the_csms_event_stream() {
+    use ocpp_kit::decode::{DecodeOptions, RepairKind};
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let csms = Csms::builder()
+        .bind(listener.local_addr().unwrap())
+        .versions([Version::V2_1])
+        .authenticate(accept_all)
+        .decode_options_for(|_| DecodeOptions::lenient())
+        .handler(ArcHandler(Arc::new(CsmsSide::new(
+            v2_1::RegistrationStatus::Accepted,
+        ))))
+        .ping_interval(None)
+        .build()
+        .unwrap();
+    let mut events = csms.handle().events();
+    tokio::spawn(async move {
+        let _ = csms.serve_on(listener).await;
+    });
+
+    let station = station(port, "CS-LAX01");
+    // A boot whose `reason` is not an OCPP value: decodes leniently, as `UnknownValue`.
+    let payload = RawValue::from_string(
+        r#"{"reason":"SolarFlare","chargingStation":{"model":"M1","vendorName":"ACME"}}"#.into(),
+    )
+    .unwrap();
+    let _ = tokio::time::timeout(
+        Duration::from_secs(5),
+        station.call_raw(
+            "BootNotification",
+            payload,
+            ocpp_kit::engine::CallOptions::default(),
+        ),
+    )
+    .await
+    .expect("did not time out")
+    .expect("answered");
+
+    let repaired = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Ok(SessionEvent::Repaired {
+                identity,
+                action,
+                repairs,
+                ..
+            }) = events.recv().await
+            {
+                return (identity, action, repairs);
+            }
+        }
+    })
+    .await
+    .expect("a Repaired event");
+    assert_eq!(repaired.0.as_str(), "CS-LAX01");
+    assert_eq!(repaired.1, "BootNotification");
+    assert_eq!(repaired.2.len(), 1);
+    assert_eq!(repaired.2[0].pointer, "/reason");
+    assert_eq!(repaired.2[0].kind, RepairKind::UnknownEnumValue);
+    station.shutdown(Duration::from_secs(2)).await;
+}
+
+/// The CSMS reports whether `permessage-deflate` was negotiated, and a session's
+/// `Disconnected` event carries the close frame the peer sent.
+#[cfg(feature = "compression")]
+#[tokio::test]
+async fn sessions_report_compression_and_the_peers_close_frame() {
+    let csms_handler = Arc::new(CsmsSide::new(v2_1::RegistrationStatus::Accepted));
+    let (port, csms) = start_csms(csms_handler, accept_all).await;
+    let mut fleet = csms.events();
+    let station = station(port, "CS-ZIP01");
+
+    let compressed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Ok(SessionEvent::Opened { compressed, .. }) = fleet.recv().await {
+                return compressed;
+            }
+        }
+    })
+    .await
+    .expect("an Opened event");
+    assert!(compressed, "both ends offer permessage-deflate by default");
+
+    let identity = Identity::new("CS-ZIP01").unwrap();
+    let session = csms.session(&identity).await.expect("a session");
+    let mut events = session.events();
+    station.shutdown(Duration::from_secs(2)).await;
+
+    let peer_close = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Ok(ocpp_kit::transport::Event::Disconnected { peer_close, .. }) =
+                events.recv().await
+            {
+                return peer_close;
+            }
+        }
+    })
+    .await
+    .expect("a Disconnected event");
+    let frame = peer_close.expect("the station sent a close frame");
+    assert_eq!(frame.code, ocpp_kit::transport::CloseCode::NORMAL);
 }

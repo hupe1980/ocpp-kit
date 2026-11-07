@@ -1,0 +1,1 @@
+[2,"2.1-SetNetworkProfile","SetNetworkProfile",{"configurationSlot":1,"connectionData":{"ocppInterface":"Wired0","ocppTransport":"SOAP","messageTimeout":1,"ocppCsmsUrl":"SYNTH-01","securityProfile":1}}]

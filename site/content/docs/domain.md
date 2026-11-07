@@ -309,8 +309,11 @@ It also detects gaps — an offline period whose queue overflowed shows up as
 
 ### The energy figures
 
-`Record::energy_wh()` is the difference of the station's start and stop registers, computed
-exactly:
+`Record::energy()` is the difference of the station's start and stop registers, computed
+exactly. It returns a `RegisterDelta`, not a number: the figure is reached only through
+`unverified_wh()` — so the call site says what it is — and `signed()` hands over the signed
+records it arrived with. It converts into nothing, so it cannot slide onto an invoice line
+unnamed.
 
 ```rust
 use ocpp_kit::csms::ledger::{EventKind, Ledger, TransactionEvent};
@@ -331,7 +334,7 @@ ledger.ingest(
 );
 
 let record = ledger.transaction(&station, "tx-1").unwrap();
-assert_eq!(record.energy_wh().unwrap().to_string(), "16.500");
+assert_eq!(record.energy().unwrap().unverified_wh().to_string(), "16.500");
 ```
 
 Both registers are [exact decimals](@/docs/messages.md), so the subtraction is exact and the
@@ -358,6 +361,35 @@ for reading in record.signed_with_context("Transaction.End") {
 `Record::signed` is one list rather than a start and a stop because 1.6 does not give the two
 their own messages: a `StartTransaction` has nowhere to carry a signed record, so both records
 arrive in `StopTransaction.transactionData`.
+
+### Surviving a restart
+
+A restart is exactly when a station's retries arrive — it timed out because the CSMS went
+away — and an in-memory ledger has forgotten the first copy. `DurableLedger` journals every
+input to a `LedgerStore` *before* applying it, and rebuilds by replay:
+
+```rust
+use ocpp_kit::csms::ledger::{EventKind, Ingested, TransactionEvent};
+use ocpp_kit::csms::ledger_store::{DurableLedger, MemLedgerStore};
+use ocpp_kit::types::{DateTime, Identity};
+
+let station = Identity::new("CS-0001").unwrap();
+let at = DateTime::parse("2026-11-07T10:00:00Z").unwrap();
+let started = TransactionEvent::new(station, "tx-1", 0, EventKind::Started, at);
+
+let mut ledger = DurableLedger::open(MemLedgerStore::new()).unwrap();
+assert_eq!(ledger.ingest(&started).unwrap(), Ingested::Applied);
+
+// Restart: only the store survives, and it is enough.
+let mut ledger = DurableLedger::open(ledger.into_store()).unwrap();
+assert_eq!(ledger.ingest(&started).unwrap(), Ingested::Duplicate);
+```
+
+`FileLedgerStore::open(dir)` keeps a `journal.jsonl` and a `snapshot.json`, every write
+flushed with `sync_data`; `checkpoint()` folds the journal into the snapshot. For a database,
+implement `LedgerStore`'s three methods — `load`, `append`, `checkpoint` — there. If `append`
+fails nothing is applied: answer the station with an error so it retries, rather than
+acknowledging an event a restart would forget.
 
 `Record` also keeps `evse_id` / `connector_id` from the first event that named one, since only
 some messages do. It keeps no `charging_state`: occupancy billing needs the *series* of states

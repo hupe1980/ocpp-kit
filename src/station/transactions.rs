@@ -705,7 +705,8 @@ mod tests {
         assert!(machine.transaction_id().is_none());
 
         // The cable has not moved. Nothing should start.
-        assert!(machine.observe(plugged, now()).is_empty());
+        let actions = machine.observe(plugged, now());
+        assert!(actions.is_empty(), "{actions:?}");
 
         // Re-plugging it is a real event, and does.
         machine.observe(Conditions::default(), now());

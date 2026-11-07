@@ -165,7 +165,7 @@ static V2X: &[ActionInfo] = &[
     call("GetTariffs", Csms, "I"),
     call("GetTransactionStatus", Csms, "E"),
     call("GetVariables", Csms, "B"),
-    call("Heartbeat", Cs, "B"),
+    call("Heartbeat", Cs, "G"), // G02
     call("InstallCertificate", Csms, "M"),
     call("LogStatusNotification", Cs, "N"),
     call("MeterValues", Cs, "J"),
@@ -188,8 +188,8 @@ static V2X: &[ActionInfo] = &[
     },
     call("NotifyPriorityCharging", Cs, "K"),
     call("NotifyReport", Cs, "B"),
-    call("NotifySettlement", Cs, "I"),
-    call("NotifyWebPaymentStarted", Cs, "I"),
+    call("NotifySettlement", Cs, "C"),          // C21
+    call("NotifyWebPaymentStarted", Csms, "C"), // C25.FR.21, C25.FR.27
     call("OpenPeriodicEventStream", Cs, "N"),
     call("PublishFirmware", Csms, "L"),
     call("PublishFirmwareStatusNotification", Cs, "L"),
@@ -222,7 +222,7 @@ static V2X: &[ActionInfo] = &[
     call("UpdateDynamicSchedule", Csms, "K"),
     call("UpdateFirmware", Csms, "L"),
     call("UsePriorityCharging", Csms, "K"),
-    call("VatNumberValidation", Cs, "I"),
+    call("VatNumberValidation", Cs, "C"), // C18
 ];
 
 pub fn table(version: VersionId) -> &'static [ActionInfo] {

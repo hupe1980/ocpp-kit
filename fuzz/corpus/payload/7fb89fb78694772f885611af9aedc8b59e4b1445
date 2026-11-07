@@ -1,0 +1,1 @@
+{"batteryData":[{"evseId":1,"serialNumber":"SYNTH-01","soC":1.5,"soH":1.5}],"eventType":"BatteryIn","idToken":{"idToken":"SYNTH-01","type":"SYNTH-01"},"requestId":1}

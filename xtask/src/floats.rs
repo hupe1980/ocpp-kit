@@ -44,8 +44,25 @@ pub fn run() -> Result<()> {
             .unwrap_or(file)
             .display()
             .to_string();
+        // Inside a `pub trait`, a method is public without the `pub` keyword.
+        let mut depth: i64 = 0;
+        let mut trait_depth: Option<i64> = None;
         for (index, line) in text.lines().enumerate() {
-            if !is_public_signature(line) || line.contains(ESCAPE) {
+            let trimmed = line.trim_start();
+            if trait_depth.is_none() && trimmed.starts_with("pub trait ") {
+                trait_depth = Some(depth);
+            }
+            let in_pub_trait = trait_depth.is_some_and(|d| depth > d);
+            if !trimmed.starts_with("//") {
+                depth += i64::try_from(line.matches('{').count()).unwrap_or(0);
+                depth -= i64::try_from(line.matches('}').count()).unwrap_or(0);
+            }
+            if trait_depth.is_some_and(|d| depth <= d) && !trimmed.starts_with("pub trait ") {
+                trait_depth = None;
+            }
+            let public = is_public_signature(line)
+                || (in_pub_trait && trimmed.starts_with("fn ") && float_in(line).is_some());
+            if !public || line.contains(ESCAPE) {
                 continue;
             }
             if let Some(float) = float_in(line) {
@@ -85,6 +102,13 @@ fn is_public_signature(line: &str) -> bool {
     if trimmed.starts_with("//") {
         return false;
     }
+    // A private item's own signature line: not public, whatever it names.
+    if ["fn ", "const fn ", "async fn ", "unsafe fn "]
+        .iter()
+        .any(|private| trimmed.starts_with(private))
+    {
+        return false;
+    }
     trimmed.starts_with("pub fn")
         || trimmed.starts_with("pub const fn")
         || trimmed.starts_with("pub async fn")
@@ -118,4 +142,21 @@ fn collect(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_private_fn_is_not_a_public_signature_but_its_pub_twin_is() {
+        assert!(!is_public_signature(
+            "fn whole_number(v: f64) -> Option<i64> {"
+        ));
+        assert!(is_public_signature(
+            "pub fn whole_number(v: f64) -> Option<i64> {"
+        ));
+        // A continuation line of a multi-line public signature.
+        assert!(is_public_signature("    value: f64,"));
+    }
 }

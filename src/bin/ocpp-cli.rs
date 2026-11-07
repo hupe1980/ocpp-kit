@@ -311,14 +311,13 @@ fn describe_frame(version: Version, text: &str, options: &DecodeOptions) -> Resu
                 Some(origin) => format!("{origin:?}"),
                 None => "unknown action".to_string(),
             };
-            let status = match transcode(version, action, false, payload, options) {
-                Ok(_) => "valid".to_string(),
-                Err(error) => format!("INVALID: {error}"),
-            };
-            format!(
-                "{} {id} {action} [{direction}] {status}",
-                frame.message_type()
-            )
+            let line = format!("{} {id} {action} [{direction}]", frame.message_type());
+            // A payload that does not decode is a problem exactly like a frame that does not
+            // parse: it counts towards `replay`'s total and makes `inspect` exit non-zero.
+            match transcode(version, action, false, payload, options) {
+                Ok(_) => format!("{line} valid"),
+                Err(error) => return Err(format!("{line} INVALID: {error}")),
+            }
         }
         Frame::CallResult { id, payload } => {
             format!(

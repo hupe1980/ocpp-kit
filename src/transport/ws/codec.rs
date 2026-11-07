@@ -703,7 +703,7 @@ mod tests {
             server.decode(&mut buffer).unwrap(),
             Some(Message::text("a longer payload"))
         );
-        assert!(buffer.is_empty());
+        assert!(buffer.is_empty(), "{buffer:?}");
     }
 
     /// Builds a raw frame, bypassing the encoder so illegal ones can be constructed.

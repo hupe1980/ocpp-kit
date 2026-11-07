@@ -21,8 +21,9 @@ They are not even the same quantity. In the Open Charge Alliance's own example m
 set in the same message reports the transaction running `0.000 → 0.636` kWh.
 
 A CSMS billing `meterStop − meterStart` is not billing a slightly different number; it is
-billing a different register. [`Record::energy_wh`](@/docs/domain.md) is exact, and exact is
-not the same as authoritative.
+billing a different register. [`Record::energy`](@/docs/domain.md) is exact, and exact is
+not the same as authoritative — which is why it returns a `RegisterDelta` whose number is
+spelled `unverified_wh()`.
 
 ## Where each version puts it
 

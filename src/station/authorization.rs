@@ -622,7 +622,7 @@ mod tests {
             ),
             UpdateStatus::Failed
         );
-        assert!(list.is_empty());
+        assert!(list.is_empty(), "{list:?}");
     }
 
     fn seeded() -> Authorizer {
@@ -791,6 +791,6 @@ mod tests {
         cache.set_enabled(false);
         assert!(cache.get("A").is_none());
         cache.remember("B", IdTokenInfo::accepted());
-        assert!(cache.is_empty());
+        assert!(cache.is_empty(), "{cache:?}");
     }
 }

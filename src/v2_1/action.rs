@@ -106,7 +106,7 @@ pub enum Action {
     GetTransactionStatus,
     /// `GetVariables` — B — Provisioning.
     GetVariables,
-    /// `Heartbeat` — B — Provisioning.
+    /// `Heartbeat` — G — Availability.
     Heartbeat,
     /// `InstallCertificate` — M — Certificate Management.
     InstallCertificate,
@@ -140,9 +140,9 @@ pub enum Action {
     NotifyPriorityCharging,
     /// `NotifyReport` — B — Provisioning.
     NotifyReport,
-    /// `NotifySettlement` — I — Tariff and Cost.
+    /// `NotifySettlement` — C — Authorization.
     NotifySettlement,
-    /// `NotifyWebPaymentStarted` — I — Tariff and Cost.
+    /// `NotifyWebPaymentStarted` — C — Authorization.
     NotifyWebPaymentStarted,
     /// `OpenPeriodicEventStream` — N — Diagnostics.
     OpenPeriodicEventStream,
@@ -208,7 +208,7 @@ pub enum Action {
     UpdateFirmware,
     /// `UsePriorityCharging` — K — Smart Charging.
     UsePriorityCharging,
-    /// `VatNumberValidation` — I — Tariff and Cost.
+    /// `VatNumberValidation` — C — Authorization.
     VatNumberValidation,
 }
 
@@ -575,7 +575,7 @@ impl Action {
             Action::NotifyPriorityCharging => Origin::ChargingStation,
             Action::NotifyReport => Origin::ChargingStation,
             Action::NotifySettlement => Origin::ChargingStation,
-            Action::NotifyWebPaymentStarted => Origin::ChargingStation,
+            Action::NotifyWebPaymentStarted => Origin::Csms,
             Action::OpenPeriodicEventStream => Origin::ChargingStation,
             Action::PublishFirmware => Origin::Csms,
             Action::PublishFirmwareStatusNotification => Origin::ChargingStation,
@@ -655,7 +655,7 @@ impl Action {
             Action::GetTariffs => "I",
             Action::GetTransactionStatus => "E",
             Action::GetVariables => "B",
-            Action::Heartbeat => "B",
+            Action::Heartbeat => "G",
             Action::InstallCertificate => "M",
             Action::LogStatusNotification => "N",
             Action::MeterValues => "J",
@@ -672,8 +672,8 @@ impl Action {
             Action::NotifyPeriodicEventStream => "N",
             Action::NotifyPriorityCharging => "K",
             Action::NotifyReport => "B",
-            Action::NotifySettlement => "I",
-            Action::NotifyWebPaymentStarted => "I",
+            Action::NotifySettlement => "C",
+            Action::NotifyWebPaymentStarted => "C",
             Action::OpenPeriodicEventStream => "N",
             Action::PublishFirmware => "L",
             Action::PublishFirmwareStatusNotification => "L",
@@ -706,7 +706,7 @@ impl Action {
             Action::UpdateDynamicSchedule => "K",
             Action::UpdateFirmware => "L",
             Action::UsePriorityCharging => "K",
-            Action::VatNumberValidation => "I",
+            Action::VatNumberValidation => "C",
         }
     }
 }
@@ -1317,8 +1317,6 @@ pub enum CsRequest {
     NotifyReport(NotifyReportRequest),
     /// `NotifySettlement`.
     NotifySettlement(NotifySettlementRequest),
-    /// `NotifyWebPaymentStarted`.
-    NotifyWebPaymentStarted(NotifyWebPaymentStartedRequest),
     /// `OpenPeriodicEventStream`.
     OpenPeriodicEventStream(OpenPeriodicEventStreamRequest),
     /// `PublishFirmwareStatusNotification`.
@@ -1374,7 +1372,6 @@ impl CsRequest {
             Self::NotifyPriorityCharging(_) => Action::NotifyPriorityCharging,
             Self::NotifyReport(_) => Action::NotifyReport,
             Self::NotifySettlement(_) => Action::NotifySettlement,
-            Self::NotifyWebPaymentStarted(_) => Action::NotifyWebPaymentStarted,
             Self::OpenPeriodicEventStream(_) => Action::OpenPeriodicEventStream,
             Self::PublishFirmwareStatusNotification(_) => Action::PublishFirmwareStatusNotification,
             Self::PullDynamicScheduleUpdate(_) => Action::PullDynamicScheduleUpdate,
@@ -1505,11 +1502,6 @@ impl CsRequest {
             Action::NotifySettlement => Self::NotifySettlement(crate::decode::decode_payload::<
                 NotifySettlementRequest,
             >(payload, options)?),
-            Action::NotifyWebPaymentStarted => {
-                Self::NotifyWebPaymentStarted(crate::decode::decode_payload::<
-                    NotifyWebPaymentStartedRequest,
-                >(payload, options)?)
-            }
             Action::OpenPeriodicEventStream => {
                 Self::OpenPeriodicEventStream(crate::decode::decode_payload::<
                     OpenPeriodicEventStreamRequest,
@@ -1561,6 +1553,166 @@ impl CsRequest {
         })
     }
 
+    /// [`decode`](Self::decode), also returning every [`Repair`](crate::decode::Repair)
+    /// the lenient options applied.
+    pub fn decode_reporting(
+        action: Action,
+        payload: &RawValue,
+        options: &DecodeOptions,
+    ) -> Result<crate::decode::Decoded<Self>, DecodeError> {
+        Ok(match action {
+            Action::Authorize => {
+                crate::decode::decode_payload_reporting::<AuthorizeRequest>(payload, options)?
+                    .map(Self::Authorize)
+            }
+            Action::BatterySwap => {
+                crate::decode::decode_payload_reporting::<BatterySwapRequest>(payload, options)?
+                    .map(Self::BatterySwap)
+            }
+            Action::BootNotification => crate::decode::decode_payload_reporting::<
+                BootNotificationRequest,
+            >(payload, options)?
+            .map(Self::BootNotification),
+            Action::ClearedChargingLimit => crate::decode::decode_payload_reporting::<
+                ClearedChargingLimitRequest,
+            >(payload, options)?
+            .map(Self::ClearedChargingLimit),
+            Action::ClosePeriodicEventStream => crate::decode::decode_payload_reporting::<
+                ClosePeriodicEventStreamRequest,
+            >(payload, options)?
+            .map(Self::ClosePeriodicEventStream),
+            Action::DataTransfer => {
+                crate::decode::decode_payload_reporting::<DataTransferRequest>(payload, options)?
+                    .map(Self::DataTransfer)
+            }
+            Action::FirmwareStatusNotification => crate::decode::decode_payload_reporting::<
+                FirmwareStatusNotificationRequest,
+            >(payload, options)?
+            .map(Self::FirmwareStatusNotification),
+            Action::Get15118EVCertificate => crate::decode::decode_payload_reporting::<
+                Get15118EVCertificateRequest,
+            >(payload, options)?
+            .map(Self::Get15118EVCertificate),
+            Action::GetCertificateChainStatus => crate::decode::decode_payload_reporting::<
+                GetCertificateChainStatusRequest,
+            >(payload, options)?
+            .map(Self::GetCertificateChainStatus),
+            Action::GetCertificateStatus => crate::decode::decode_payload_reporting::<
+                GetCertificateStatusRequest,
+            >(payload, options)?
+            .map(Self::GetCertificateStatus),
+            Action::Heartbeat => {
+                crate::decode::decode_payload_reporting::<HeartbeatRequest>(payload, options)?
+                    .map(Self::Heartbeat)
+            }
+            Action::LogStatusNotification => crate::decode::decode_payload_reporting::<
+                LogStatusNotificationRequest,
+            >(payload, options)?
+            .map(Self::LogStatusNotification),
+            Action::MeterValues => {
+                crate::decode::decode_payload_reporting::<MeterValuesRequest>(payload, options)?
+                    .map(Self::MeterValues)
+            }
+            Action::NotifyChargingLimit => crate::decode::decode_payload_reporting::<
+                NotifyChargingLimitRequest,
+            >(payload, options)?
+            .map(Self::NotifyChargingLimit),
+            Action::NotifyCustomerInformation => crate::decode::decode_payload_reporting::<
+                NotifyCustomerInformationRequest,
+            >(payload, options)?
+            .map(Self::NotifyCustomerInformation),
+            Action::NotifyDERAlarm => {
+                crate::decode::decode_payload_reporting::<NotifyDERAlarmRequest>(payload, options)?
+                    .map(Self::NotifyDERAlarm)
+            }
+            Action::NotifyDERStartStop => crate::decode::decode_payload_reporting::<
+                NotifyDERStartStopRequest,
+            >(payload, options)?
+            .map(Self::NotifyDERStartStop),
+            Action::NotifyDisplayMessages => crate::decode::decode_payload_reporting::<
+                NotifyDisplayMessagesRequest,
+            >(payload, options)?
+            .map(Self::NotifyDisplayMessages),
+            Action::NotifyEVChargingNeeds => crate::decode::decode_payload_reporting::<
+                NotifyEVChargingNeedsRequest,
+            >(payload, options)?
+            .map(Self::NotifyEVChargingNeeds),
+            Action::NotifyEVChargingSchedule => crate::decode::decode_payload_reporting::<
+                NotifyEVChargingScheduleRequest,
+            >(payload, options)?
+            .map(Self::NotifyEVChargingSchedule),
+            Action::NotifyEvent => {
+                crate::decode::decode_payload_reporting::<NotifyEventRequest>(payload, options)?
+                    .map(Self::NotifyEvent)
+            }
+            Action::NotifyMonitoringReport => crate::decode::decode_payload_reporting::<
+                NotifyMonitoringReportRequest,
+            >(payload, options)?
+            .map(Self::NotifyMonitoringReport),
+            Action::NotifyPeriodicEventStream => crate::decode::decode_payload_reporting::<
+                NotifyPeriodicEventStreamRequest,
+            >(payload, options)?
+            .map(Self::NotifyPeriodicEventStream),
+            Action::NotifyPriorityCharging => crate::decode::decode_payload_reporting::<
+                NotifyPriorityChargingRequest,
+            >(payload, options)?
+            .map(Self::NotifyPriorityCharging),
+            Action::NotifyReport => {
+                crate::decode::decode_payload_reporting::<NotifyReportRequest>(payload, options)?
+                    .map(Self::NotifyReport)
+            }
+            Action::NotifySettlement => crate::decode::decode_payload_reporting::<
+                NotifySettlementRequest,
+            >(payload, options)?
+            .map(Self::NotifySettlement),
+            Action::OpenPeriodicEventStream => crate::decode::decode_payload_reporting::<
+                OpenPeriodicEventStreamRequest,
+            >(payload, options)?
+            .map(Self::OpenPeriodicEventStream),
+            Action::PublishFirmwareStatusNotification => crate::decode::decode_payload_reporting::<
+                PublishFirmwareStatusNotificationRequest,
+            >(payload, options)?
+            .map(Self::PublishFirmwareStatusNotification),
+            Action::PullDynamicScheduleUpdate => crate::decode::decode_payload_reporting::<
+                PullDynamicScheduleUpdateRequest,
+            >(payload, options)?
+            .map(Self::PullDynamicScheduleUpdate),
+            Action::ReportChargingProfiles => crate::decode::decode_payload_reporting::<
+                ReportChargingProfilesRequest,
+            >(payload, options)?
+            .map(Self::ReportChargingProfiles),
+            Action::ReportDERControl => crate::decode::decode_payload_reporting::<
+                ReportDERControlRequest,
+            >(payload, options)?
+            .map(Self::ReportDERControl),
+            Action::ReservationStatusUpdate => crate::decode::decode_payload_reporting::<
+                ReservationStatusUpdateRequest,
+            >(payload, options)?
+            .map(Self::ReservationStatusUpdate),
+            Action::SecurityEventNotification => crate::decode::decode_payload_reporting::<
+                SecurityEventNotificationRequest,
+            >(payload, options)?
+            .map(Self::SecurityEventNotification),
+            Action::SignCertificate => {
+                crate::decode::decode_payload_reporting::<SignCertificateRequest>(payload, options)?
+                    .map(Self::SignCertificate)
+            }
+            Action::StatusNotification => crate::decode::decode_payload_reporting::<
+                StatusNotificationRequest,
+            >(payload, options)?
+            .map(Self::StatusNotification),
+            Action::TransactionEvent => crate::decode::decode_payload_reporting::<
+                TransactionEventRequest,
+            >(payload, options)?
+            .map(Self::TransactionEvent),
+            Action::VatNumberValidation => crate::decode::decode_payload_reporting::<
+                VatNumberValidationRequest,
+            >(payload, options)?
+            .map(Self::VatNumberValidation),
+            other => return Err(DecodeError::unsupported_action(other.as_str())),
+        })
+    }
+
     /// Serializes the payload object (without the OCPP-J frame).
     pub fn to_json(&self) -> Result<alloc::string::String, serde_json::Error> {
         match self {
@@ -1590,7 +1742,6 @@ impl CsRequest {
             Self::NotifyPriorityCharging(p) => serde_json::to_string(p),
             Self::NotifyReport(p) => serde_json::to_string(p),
             Self::NotifySettlement(p) => serde_json::to_string(p),
-            Self::NotifyWebPaymentStarted(p) => serde_json::to_string(p),
             Self::OpenPeriodicEventStream(p) => serde_json::to_string(p),
             Self::PublishFirmwareStatusNotification(p) => serde_json::to_string(p),
             Self::PullDynamicScheduleUpdate(p) => serde_json::to_string(p),
@@ -1635,7 +1786,6 @@ impl Validate for CsRequest {
             Self::NotifyPriorityCharging(p) => p.validate_at(path, out),
             Self::NotifyReport(p) => p.validate_at(path, out),
             Self::NotifySettlement(p) => p.validate_at(path, out),
-            Self::NotifyWebPaymentStarted(p) => p.validate_at(path, out),
             Self::OpenPeriodicEventStream(p) => p.validate_at(path, out),
             Self::PublishFirmwareStatusNotification(p) => p.validate_at(path, out),
             Self::PullDynamicScheduleUpdate(p) => p.validate_at(path, out),
@@ -1680,7 +1830,6 @@ impl serde::Serialize for CsRequest {
             Self::NotifyPriorityCharging(p) => p.serialize(ser),
             Self::NotifyReport(p) => p.serialize(ser),
             Self::NotifySettlement(p) => p.serialize(ser),
-            Self::NotifyWebPaymentStarted(p) => p.serialize(ser),
             Self::OpenPeriodicEventStream(p) => p.serialize(ser),
             Self::PublishFirmwareStatusNotification(p) => p.serialize(ser),
             Self::PullDynamicScheduleUpdate(p) => p.serialize(ser),
@@ -1693,6 +1842,20 @@ impl serde::Serialize for CsRequest {
             Self::TransactionEvent(p) => p.serialize(ser),
             Self::VatNumberValidation(p) => p.serialize(ser),
         }
+    }
+}
+
+impl crate::message::Sealed for CsRequest {}
+
+impl crate::message::DecodeRequest for CsRequest {
+    type Action = Action;
+
+    fn decode_reporting(
+        action: Action,
+        payload: &RawValue,
+        options: &DecodeOptions,
+    ) -> Result<crate::decode::Decoded<Self>, DecodeError> {
+        CsRequest::decode_reporting(action, payload, options)
     }
 }
 
@@ -1753,8 +1916,6 @@ pub enum CsResponse {
     NotifyReport(NotifyReportResponse),
     /// `NotifySettlement`.
     NotifySettlement(NotifySettlementResponse),
-    /// `NotifyWebPaymentStarted`.
-    NotifyWebPaymentStarted(NotifyWebPaymentStartedResponse),
     /// `OpenPeriodicEventStream`.
     OpenPeriodicEventStream(OpenPeriodicEventStreamResponse),
     /// `PublishFirmwareStatusNotification`.
@@ -1809,7 +1970,6 @@ impl CsResponse {
             Self::NotifyPriorityCharging(_) => Action::NotifyPriorityCharging,
             Self::NotifyReport(_) => Action::NotifyReport,
             Self::NotifySettlement(_) => Action::NotifySettlement,
-            Self::NotifyWebPaymentStarted(_) => Action::NotifyWebPaymentStarted,
             Self::OpenPeriodicEventStream(_) => Action::OpenPeriodicEventStream,
             Self::PublishFirmwareStatusNotification(_) => Action::PublishFirmwareStatusNotification,
             Self::PullDynamicScheduleUpdate(_) => Action::PullDynamicScheduleUpdate,
@@ -1935,11 +2095,6 @@ impl CsResponse {
             Action::NotifySettlement => Self::NotifySettlement(crate::decode::decode_payload::<
                 NotifySettlementResponse,
             >(payload, options)?),
-            Action::NotifyWebPaymentStarted => {
-                Self::NotifyWebPaymentStarted(crate::decode::decode_payload::<
-                    NotifyWebPaymentStartedResponse,
-                >(payload, options)?)
-            }
             Action::OpenPeriodicEventStream => {
                 Self::OpenPeriodicEventStream(crate::decode::decode_payload::<
                     OpenPeriodicEventStreamResponse,
@@ -2019,7 +2174,6 @@ impl CsResponse {
             Self::NotifyPriorityCharging(p) => serde_json::to_string(p),
             Self::NotifyReport(p) => serde_json::to_string(p),
             Self::NotifySettlement(p) => serde_json::to_string(p),
-            Self::NotifyWebPaymentStarted(p) => serde_json::to_string(p),
             Self::OpenPeriodicEventStream(p) => serde_json::to_string(p),
             Self::PublishFirmwareStatusNotification(p) => serde_json::to_string(p),
             Self::PullDynamicScheduleUpdate(p) => serde_json::to_string(p),
@@ -2063,7 +2217,6 @@ impl Validate for CsResponse {
             Self::NotifyPriorityCharging(p) => p.validate_at(path, out),
             Self::NotifyReport(p) => p.validate_at(path, out),
             Self::NotifySettlement(p) => p.validate_at(path, out),
-            Self::NotifyWebPaymentStarted(p) => p.validate_at(path, out),
             Self::OpenPeriodicEventStream(p) => p.validate_at(path, out),
             Self::PublishFirmwareStatusNotification(p) => p.validate_at(path, out),
             Self::PullDynamicScheduleUpdate(p) => p.validate_at(path, out),
@@ -2107,7 +2260,6 @@ impl serde::Serialize for CsResponse {
             Self::NotifyPriorityCharging(p) => p.serialize(ser),
             Self::NotifyReport(p) => p.serialize(ser),
             Self::NotifySettlement(p) => p.serialize(ser),
-            Self::NotifyWebPaymentStarted(p) => p.serialize(ser),
             Self::OpenPeriodicEventStream(p) => p.serialize(ser),
             Self::PublishFirmwareStatusNotification(p) => p.serialize(ser),
             Self::PullDynamicScheduleUpdate(p) => p.serialize(ser),
@@ -2192,6 +2344,8 @@ pub enum CsmsRequest {
     InstallCertificate(InstallCertificateRequest),
     /// `NotifyAllowedEnergyTransfer`.
     NotifyAllowedEnergyTransfer(NotifyAllowedEnergyTransferRequest),
+    /// `NotifyWebPaymentStarted`.
+    NotifyWebPaymentStarted(NotifyWebPaymentStartedRequest),
     /// `PublishFirmware`.
     PublishFirmware(PublishFirmwareRequest),
     /// `RequestBatterySwap`.
@@ -2275,6 +2429,7 @@ impl CsmsRequest {
             Self::GetVariables(_) => Action::GetVariables,
             Self::InstallCertificate(_) => Action::InstallCertificate,
             Self::NotifyAllowedEnergyTransfer(_) => Action::NotifyAllowedEnergyTransfer,
+            Self::NotifyWebPaymentStarted(_) => Action::NotifyWebPaymentStarted,
             Self::PublishFirmware(_) => Action::PublishFirmware,
             Self::RequestBatterySwap(_) => Action::RequestBatterySwap,
             Self::RequestStartTransaction(_) => Action::RequestStartTransaction,
@@ -2432,6 +2587,11 @@ impl CsmsRequest {
                     NotifyAllowedEnergyTransferRequest,
                 >(payload, options)?)
             }
+            Action::NotifyWebPaymentStarted => {
+                Self::NotifyWebPaymentStarted(crate::decode::decode_payload::<
+                    NotifyWebPaymentStartedRequest,
+                >(payload, options)?)
+            }
             Action::PublishFirmware => Self::PublishFirmware(crate::decode::decode_payload::<
                 PublishFirmwareRequest,
             >(payload, options)?),
@@ -2512,6 +2672,238 @@ impl CsmsRequest {
         })
     }
 
+    /// [`decode`](Self::decode), also returning every [`Repair`](crate::decode::Repair)
+    /// the lenient options applied.
+    pub fn decode_reporting(
+        action: Action,
+        payload: &RawValue,
+        options: &DecodeOptions,
+    ) -> Result<crate::decode::Decoded<Self>, DecodeError> {
+        Ok(match action {
+            Action::AFRRSignal => {
+                crate::decode::decode_payload_reporting::<AFRRSignalRequest>(payload, options)?
+                    .map(Self::AFRRSignal)
+            }
+            Action::AdjustPeriodicEventStream => crate::decode::decode_payload_reporting::<
+                AdjustPeriodicEventStreamRequest,
+            >(payload, options)?
+            .map(Self::AdjustPeriodicEventStream),
+            Action::CancelReservation => crate::decode::decode_payload_reporting::<
+                CancelReservationRequest,
+            >(payload, options)?
+            .map(Self::CancelReservation),
+            Action::CertificateSigned => crate::decode::decode_payload_reporting::<
+                CertificateSignedRequest,
+            >(payload, options)?
+            .map(Self::CertificateSigned),
+            Action::ChangeAvailability => crate::decode::decode_payload_reporting::<
+                ChangeAvailabilityRequest,
+            >(payload, options)?
+            .map(Self::ChangeAvailability),
+            Action::ChangeTransactionTariff => crate::decode::decode_payload_reporting::<
+                ChangeTransactionTariffRequest,
+            >(payload, options)?
+            .map(Self::ChangeTransactionTariff),
+            Action::ClearCache => {
+                crate::decode::decode_payload_reporting::<ClearCacheRequest>(payload, options)?
+                    .map(Self::ClearCache)
+            }
+            Action::ClearChargingProfile => crate::decode::decode_payload_reporting::<
+                ClearChargingProfileRequest,
+            >(payload, options)?
+            .map(Self::ClearChargingProfile),
+            Action::ClearDERControl => {
+                crate::decode::decode_payload_reporting::<ClearDERControlRequest>(payload, options)?
+                    .map(Self::ClearDERControl)
+            }
+            Action::ClearDisplayMessage => crate::decode::decode_payload_reporting::<
+                ClearDisplayMessageRequest,
+            >(payload, options)?
+            .map(Self::ClearDisplayMessage),
+            Action::ClearTariffs => {
+                crate::decode::decode_payload_reporting::<ClearTariffsRequest>(payload, options)?
+                    .map(Self::ClearTariffs)
+            }
+            Action::ClearVariableMonitoring => crate::decode::decode_payload_reporting::<
+                ClearVariableMonitoringRequest,
+            >(payload, options)?
+            .map(Self::ClearVariableMonitoring),
+            Action::CostUpdated => {
+                crate::decode::decode_payload_reporting::<CostUpdatedRequest>(payload, options)?
+                    .map(Self::CostUpdated)
+            }
+            Action::CustomerInformation => crate::decode::decode_payload_reporting::<
+                CustomerInformationRequest,
+            >(payload, options)?
+            .map(Self::CustomerInformation),
+            Action::DataTransfer => {
+                crate::decode::decode_payload_reporting::<DataTransferRequest>(payload, options)?
+                    .map(Self::DataTransfer)
+            }
+            Action::DeleteCertificate => crate::decode::decode_payload_reporting::<
+                DeleteCertificateRequest,
+            >(payload, options)?
+            .map(Self::DeleteCertificate),
+            Action::GetBaseReport => {
+                crate::decode::decode_payload_reporting::<GetBaseReportRequest>(payload, options)?
+                    .map(Self::GetBaseReport)
+            }
+            Action::GetChargingProfiles => crate::decode::decode_payload_reporting::<
+                GetChargingProfilesRequest,
+            >(payload, options)?
+            .map(Self::GetChargingProfiles),
+            Action::GetCompositeSchedule => crate::decode::decode_payload_reporting::<
+                GetCompositeScheduleRequest,
+            >(payload, options)?
+            .map(Self::GetCompositeSchedule),
+            Action::GetDERControl => {
+                crate::decode::decode_payload_reporting::<GetDERControlRequest>(payload, options)?
+                    .map(Self::GetDERControl)
+            }
+            Action::GetDisplayMessages => crate::decode::decode_payload_reporting::<
+                GetDisplayMessagesRequest,
+            >(payload, options)?
+            .map(Self::GetDisplayMessages),
+            Action::GetInstalledCertificateIds => crate::decode::decode_payload_reporting::<
+                GetInstalledCertificateIdsRequest,
+            >(payload, options)?
+            .map(Self::GetInstalledCertificateIds),
+            Action::GetLocalListVersion => crate::decode::decode_payload_reporting::<
+                GetLocalListVersionRequest,
+            >(payload, options)?
+            .map(Self::GetLocalListVersion),
+            Action::GetLog => {
+                crate::decode::decode_payload_reporting::<GetLogRequest>(payload, options)?
+                    .map(Self::GetLog)
+            }
+            Action::GetMonitoringReport => crate::decode::decode_payload_reporting::<
+                GetMonitoringReportRequest,
+            >(payload, options)?
+            .map(Self::GetMonitoringReport),
+            Action::GetPeriodicEventStream => crate::decode::decode_payload_reporting::<
+                GetPeriodicEventStreamRequest,
+            >(payload, options)?
+            .map(Self::GetPeriodicEventStream),
+            Action::GetReport => {
+                crate::decode::decode_payload_reporting::<GetReportRequest>(payload, options)?
+                    .map(Self::GetReport)
+            }
+            Action::GetTariffs => {
+                crate::decode::decode_payload_reporting::<GetTariffsRequest>(payload, options)?
+                    .map(Self::GetTariffs)
+            }
+            Action::GetTransactionStatus => crate::decode::decode_payload_reporting::<
+                GetTransactionStatusRequest,
+            >(payload, options)?
+            .map(Self::GetTransactionStatus),
+            Action::GetVariables => {
+                crate::decode::decode_payload_reporting::<GetVariablesRequest>(payload, options)?
+                    .map(Self::GetVariables)
+            }
+            Action::InstallCertificate => crate::decode::decode_payload_reporting::<
+                InstallCertificateRequest,
+            >(payload, options)?
+            .map(Self::InstallCertificate),
+            Action::NotifyAllowedEnergyTransfer => crate::decode::decode_payload_reporting::<
+                NotifyAllowedEnergyTransferRequest,
+            >(payload, options)?
+            .map(Self::NotifyAllowedEnergyTransfer),
+            Action::NotifyWebPaymentStarted => crate::decode::decode_payload_reporting::<
+                NotifyWebPaymentStartedRequest,
+            >(payload, options)?
+            .map(Self::NotifyWebPaymentStarted),
+            Action::PublishFirmware => {
+                crate::decode::decode_payload_reporting::<PublishFirmwareRequest>(payload, options)?
+                    .map(Self::PublishFirmware)
+            }
+            Action::RequestBatterySwap => crate::decode::decode_payload_reporting::<
+                RequestBatterySwapRequest,
+            >(payload, options)?
+            .map(Self::RequestBatterySwap),
+            Action::RequestStartTransaction => crate::decode::decode_payload_reporting::<
+                RequestStartTransactionRequest,
+            >(payload, options)?
+            .map(Self::RequestStartTransaction),
+            Action::RequestStopTransaction => crate::decode::decode_payload_reporting::<
+                RequestStopTransactionRequest,
+            >(payload, options)?
+            .map(Self::RequestStopTransaction),
+            Action::ReserveNow => {
+                crate::decode::decode_payload_reporting::<ReserveNowRequest>(payload, options)?
+                    .map(Self::ReserveNow)
+            }
+            Action::Reset => {
+                crate::decode::decode_payload_reporting::<ResetRequest>(payload, options)?
+                    .map(Self::Reset)
+            }
+            Action::SendLocalList => {
+                crate::decode::decode_payload_reporting::<SendLocalListRequest>(payload, options)?
+                    .map(Self::SendLocalList)
+            }
+            Action::SetChargingProfile => crate::decode::decode_payload_reporting::<
+                SetChargingProfileRequest,
+            >(payload, options)?
+            .map(Self::SetChargingProfile),
+            Action::SetDERControl => {
+                crate::decode::decode_payload_reporting::<SetDERControlRequest>(payload, options)?
+                    .map(Self::SetDERControl)
+            }
+            Action::SetDefaultTariff => crate::decode::decode_payload_reporting::<
+                SetDefaultTariffRequest,
+            >(payload, options)?
+            .map(Self::SetDefaultTariff),
+            Action::SetDisplayMessage => crate::decode::decode_payload_reporting::<
+                SetDisplayMessageRequest,
+            >(payload, options)?
+            .map(Self::SetDisplayMessage),
+            Action::SetMonitoringBase => crate::decode::decode_payload_reporting::<
+                SetMonitoringBaseRequest,
+            >(payload, options)?
+            .map(Self::SetMonitoringBase),
+            Action::SetMonitoringLevel => crate::decode::decode_payload_reporting::<
+                SetMonitoringLevelRequest,
+            >(payload, options)?
+            .map(Self::SetMonitoringLevel),
+            Action::SetNetworkProfile => crate::decode::decode_payload_reporting::<
+                SetNetworkProfileRequest,
+            >(payload, options)?
+            .map(Self::SetNetworkProfile),
+            Action::SetVariableMonitoring => crate::decode::decode_payload_reporting::<
+                SetVariableMonitoringRequest,
+            >(payload, options)?
+            .map(Self::SetVariableMonitoring),
+            Action::SetVariables => {
+                crate::decode::decode_payload_reporting::<SetVariablesRequest>(payload, options)?
+                    .map(Self::SetVariables)
+            }
+            Action::TriggerMessage => {
+                crate::decode::decode_payload_reporting::<TriggerMessageRequest>(payload, options)?
+                    .map(Self::TriggerMessage)
+            }
+            Action::UnlockConnector => {
+                crate::decode::decode_payload_reporting::<UnlockConnectorRequest>(payload, options)?
+                    .map(Self::UnlockConnector)
+            }
+            Action::UnpublishFirmware => crate::decode::decode_payload_reporting::<
+                UnpublishFirmwareRequest,
+            >(payload, options)?
+            .map(Self::UnpublishFirmware),
+            Action::UpdateDynamicSchedule => crate::decode::decode_payload_reporting::<
+                UpdateDynamicScheduleRequest,
+            >(payload, options)?
+            .map(Self::UpdateDynamicSchedule),
+            Action::UpdateFirmware => {
+                crate::decode::decode_payload_reporting::<UpdateFirmwareRequest>(payload, options)?
+                    .map(Self::UpdateFirmware)
+            }
+            Action::UsePriorityCharging => crate::decode::decode_payload_reporting::<
+                UsePriorityChargingRequest,
+            >(payload, options)?
+            .map(Self::UsePriorityCharging),
+            other => return Err(DecodeError::unsupported_action(other.as_str())),
+        })
+    }
+
     /// Serializes the payload object (without the OCPP-J frame).
     pub fn to_json(&self) -> Result<alloc::string::String, serde_json::Error> {
         match self {
@@ -2547,6 +2939,7 @@ impl CsmsRequest {
             Self::GetVariables(p) => serde_json::to_string(p),
             Self::InstallCertificate(p) => serde_json::to_string(p),
             Self::NotifyAllowedEnergyTransfer(p) => serde_json::to_string(p),
+            Self::NotifyWebPaymentStarted(p) => serde_json::to_string(p),
             Self::PublishFirmware(p) => serde_json::to_string(p),
             Self::RequestBatterySwap(p) => serde_json::to_string(p),
             Self::RequestStartTransaction(p) => serde_json::to_string(p),
@@ -2608,6 +3001,7 @@ impl Validate for CsmsRequest {
             Self::GetVariables(p) => p.validate_at(path, out),
             Self::InstallCertificate(p) => p.validate_at(path, out),
             Self::NotifyAllowedEnergyTransfer(p) => p.validate_at(path, out),
+            Self::NotifyWebPaymentStarted(p) => p.validate_at(path, out),
             Self::PublishFirmware(p) => p.validate_at(path, out),
             Self::RequestBatterySwap(p) => p.validate_at(path, out),
             Self::RequestStartTransaction(p) => p.validate_at(path, out),
@@ -2669,6 +3063,7 @@ impl serde::Serialize for CsmsRequest {
             Self::GetVariables(p) => p.serialize(ser),
             Self::InstallCertificate(p) => p.serialize(ser),
             Self::NotifyAllowedEnergyTransfer(p) => p.serialize(ser),
+            Self::NotifyWebPaymentStarted(p) => p.serialize(ser),
             Self::PublishFirmware(p) => p.serialize(ser),
             Self::RequestBatterySwap(p) => p.serialize(ser),
             Self::RequestStartTransaction(p) => p.serialize(ser),
@@ -2692,6 +3087,20 @@ impl serde::Serialize for CsmsRequest {
             Self::UpdateFirmware(p) => p.serialize(ser),
             Self::UsePriorityCharging(p) => p.serialize(ser),
         }
+    }
+}
+
+impl crate::message::Sealed for CsmsRequest {}
+
+impl crate::message::DecodeRequest for CsmsRequest {
+    type Action = Action;
+
+    fn decode_reporting(
+        action: Action,
+        payload: &RawValue,
+        options: &DecodeOptions,
+    ) -> Result<crate::decode::Decoded<Self>, DecodeError> {
+        CsmsRequest::decode_reporting(action, payload, options)
     }
 }
 
@@ -2764,6 +3173,8 @@ pub enum CsmsResponse {
     InstallCertificate(InstallCertificateResponse),
     /// `NotifyAllowedEnergyTransfer`.
     NotifyAllowedEnergyTransfer(NotifyAllowedEnergyTransferResponse),
+    /// `NotifyWebPaymentStarted`.
+    NotifyWebPaymentStarted(NotifyWebPaymentStartedResponse),
     /// `PublishFirmware`.
     PublishFirmware(PublishFirmwareResponse),
     /// `RequestBatterySwap`.
@@ -2847,6 +3258,7 @@ impl CsmsResponse {
             Self::GetVariables(_) => Action::GetVariables,
             Self::InstallCertificate(_) => Action::InstallCertificate,
             Self::NotifyAllowedEnergyTransfer(_) => Action::NotifyAllowedEnergyTransfer,
+            Self::NotifyWebPaymentStarted(_) => Action::NotifyWebPaymentStarted,
             Self::PublishFirmware(_) => Action::PublishFirmware,
             Self::RequestBatterySwap(_) => Action::RequestBatterySwap,
             Self::RequestStartTransaction(_) => Action::RequestStartTransaction,
@@ -3004,6 +3416,11 @@ impl CsmsResponse {
                     NotifyAllowedEnergyTransferResponse,
                 >(payload, options)?)
             }
+            Action::NotifyWebPaymentStarted => {
+                Self::NotifyWebPaymentStarted(crate::decode::decode_payload::<
+                    NotifyWebPaymentStartedResponse,
+                >(payload, options)?)
+            }
             Action::PublishFirmware => Self::PublishFirmware(crate::decode::decode_payload::<
                 PublishFirmwareResponse,
             >(payload, options)?),
@@ -3119,6 +3536,7 @@ impl CsmsResponse {
             Self::GetVariables(p) => serde_json::to_string(p),
             Self::InstallCertificate(p) => serde_json::to_string(p),
             Self::NotifyAllowedEnergyTransfer(p) => serde_json::to_string(p),
+            Self::NotifyWebPaymentStarted(p) => serde_json::to_string(p),
             Self::PublishFirmware(p) => serde_json::to_string(p),
             Self::RequestBatterySwap(p) => serde_json::to_string(p),
             Self::RequestStartTransaction(p) => serde_json::to_string(p),
@@ -3180,6 +3598,7 @@ impl Validate for CsmsResponse {
             Self::GetVariables(p) => p.validate_at(path, out),
             Self::InstallCertificate(p) => p.validate_at(path, out),
             Self::NotifyAllowedEnergyTransfer(p) => p.validate_at(path, out),
+            Self::NotifyWebPaymentStarted(p) => p.validate_at(path, out),
             Self::PublishFirmware(p) => p.validate_at(path, out),
             Self::RequestBatterySwap(p) => p.validate_at(path, out),
             Self::RequestStartTransaction(p) => p.validate_at(path, out),
@@ -3241,6 +3660,7 @@ impl serde::Serialize for CsmsResponse {
             Self::GetVariables(p) => p.serialize(ser),
             Self::InstallCertificate(p) => p.serialize(ser),
             Self::NotifyAllowedEnergyTransfer(p) => p.serialize(ser),
+            Self::NotifyWebPaymentStarted(p) => p.serialize(ser),
             Self::PublishFirmware(p) => p.serialize(ser),
             Self::RequestBatterySwap(p) => p.serialize(ser),
             Self::RequestStartTransaction(p) => p.serialize(ser),

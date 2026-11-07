@@ -1,0 +1,6 @@
+# CALLERRORs whose ErrorDescription is empty, which OCPP-J 1.6 §4.2.3 allows ("" if none).
+# Both modes accept; frame parsing has no lenient mode.
+> [2,"1","DataTransfer",{"vendorId":"com.example.synth","messageId":"probe"}]
+< [4,"1","NotImplemented","",{}]
+> [2,"2","DataTransfer",{"vendorId":"com.example.synth"}]
+< [4,"2","GenericError","",{}]

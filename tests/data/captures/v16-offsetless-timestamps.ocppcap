@@ -1,0 +1,13 @@
+# Firmware that formats local time without an offset, with and without a space for the `T`.
+# OCPP-J 1.6 §3.1.4 asks for UTC; RFC 3339 requires an offset.
+# Strict rejects lines 6, 10 and 12; lenient (`DateTimeLeniency::AllowSpace`) repairs all three.
+# Line 12 keeps its `Z` but has a space: RFC 3339's `date-time` grammar, which the schema's
+# `format` names, has only `T` (the §5.6 note about a space is an application's choice).
+> [2,"1","StatusNotification",{"connectorId":1,"errorCode":"NoError","status":"Available","timestamp":"2026-11-07T12:00:01"}]
+< [3,"1",{}]
+> [2,"2","Heartbeat",{}]
+< [3,"2",{"currentTime":"2026-11-07T12:00:02Z"}]
+> [2,"3","StartTransaction",{"connectorId":1,"idTag":"SYNTH-TAG-01","meterStart":0,"timestamp":"2026-11-07 12:00:05"}]
+< [3,"3",{"transactionId":102,"idTagInfo":{"status":"Accepted"}}]
+> [2,"4","StopTransaction",{"transactionId":102,"meterStop":10,"timestamp":"2026-11-07 12:20:00Z"}]
+< [3,"4",{}]

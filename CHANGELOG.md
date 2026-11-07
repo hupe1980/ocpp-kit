@@ -4,7 +4,64 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.0] — unreleased
+## [0.4.0] — unreleased
+
+A hard cut. Breaking changes are marked **Breaking** with what to do.
+
+### Fixed
+
+- `NotifyWebPaymentStarted` is sent by the CSMS (2.1 C25.FR.21/27), so both roles can exchange
+  it ([#1]). **Breaking:** it moved from `CsRequest` to `CsmsRequest`.
+- 2.x functional blocks: `Heartbeat` is G, `NotifySettlement`, `VatNumberValidation` and
+  `NotifyWebPaymentStarted` are C.
+- An `integer` accepts `20000.0` wherever its schema is draft-06 — all of 2.0.1 and 2.1, and the
+  1.6 security extensions ([#2]). Real fractions are still a `TypeConstraintViolation`; 1.6 core
+  (draft-04) accepts it only with `DecodeOptions::whole_floats` (on in `lenient()`).
+- The vendored schemas are the OCA's own files, byte for byte. **Breaking:** 1.6
+  `UnitOfMeasure` has no `Hertz` (1.6 defines no frequency unit), and 2.0.1
+  `Get15118EVCertificateResponse.exiResponse` is bounded at 5600, as Part 2 says.
+
+### Added
+
+- Leniency is reported: `decode_payload_reporting` returns `Decoded { value, repairs }`, each
+  `Repair` with a JSON pointer and a `RepairKind`. Free for conforming payloads.
+- `Ctx::decode::<v2_1::CsRequest>(&request)?` — decode with the peer's options in one line and
+  publish repairs as `Event::Repaired`. Responses from `Handle::call` report the same way.
+- Fleet-wide `SessionEvent::Violation` and `SessionEvent::Repaired`, tagged with the station.
+- `Event::Connected::compressed`, `SessionEvent::Opened::compressed`, and
+  `Event::Disconnected::peer_close` (the peer's close frame).
+- Security profile 0 (`SecurityProfile::Unsecured`) for OCPP 1.6 without the Security
+  Whitepaper; refused for any 2.x version (A00.FR.202). A CSMS reports such a connection as
+  profile 0, not 1.
+- `csms::ledger_store`: `DurableLedger` over a `LedgerStore` (`MemLedgerStore`,
+  `FileLedgerStore`) — retries after a CSMS restart are still `Duplicate`s.
+- `DecodeOptions::with_*` setters for every knob.
+- `examples/sqlite_store.rs`: a `MessageStore` two processes share safely.
+- Tooling: `cargo xtask schemas-check` (vendored schemas match `schemas/SHA256SUMS`),
+  `cargo xtask requirements` and a `coverage` that fails on a requirement id Part 2 does not
+  define, `cargo xtask footprint` (recorded on each release), cited schema patches that fail once
+  the schema is fixed, a committed fuzz corpus with regression replay, a scheduled fuzz job, and
+  synthesised field-quirk captures. `cargo xtask appendix` reads `OCPP_APPENDIX`.
+
+### Security
+
+- Updated `rustls` 0.23.46, `rustls-webpki` 0.103.16, `webpki-roots` 1.0.11, `tokio` 1.54.1,
+  `crypto-bigint` 0.7.10 and `ctutils` 0.4.8 for RUSTSEC-2026-0346, -0347, -0348, -0349, -0381,
+  -0382, -0385, -0386 and -0387.
+
+### Changed
+
+- **Breaking:** MSRV 1.87 (was 1.85): every fixed `crypto-bigint` and `ctutils` release needs it.
+- **Breaking:** `Record::energy_wh() -> Option<Decimal>` is now
+  `Record::energy() -> Option<RegisterDelta>`, which carries the signed records and spells its
+  number `unverified_wh()`. Migrate: `record.energy().map(|e| e.unverified_wh())`.
+- **Breaking:** `Event::Connected`/`Disconnected` and `SessionEvent::Opened` gained fields; match
+  with `..`.
+
+[#1]: https://github.com/hupe1980/ocpp-kit/issues/1
+[#2]: https://github.com/hupe1980/ocpp-kit/issues/2
+
+## [0.3.0] — 2026-09-15
 
 ### Added
 

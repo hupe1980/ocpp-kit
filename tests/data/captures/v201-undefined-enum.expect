@@ -1,0 +1,5 @@
+# Expected outcome of `ocpp-cli replay --version <version> [--lenient] <capture>`:
+# `pass`, or the 1-based line numbers that must report a problem (and only those).
+version = 2.0.1
+strict = 4 6
+lenient = pass

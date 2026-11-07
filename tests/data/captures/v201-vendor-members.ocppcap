@@ -1,0 +1,7 @@
+# Vendor members placed beside the defined ones instead of inside `customData`. The schemas
+# say `additionalProperties: false`; strict and lenient ignore undefined members (only
+# `DecodeOptions::pedantic()` rejects them), so both modes accept.
+> [2,"1","BootNotification",{"reason":"PowerUp","chargingStation":{"model":"SV-2","vendorName":"SynthVendor","synthFirmwareBuild":"b42"},"synthBootCounter":7}]
+< [3,"1",{"currentTime":"2026-11-07T12:00:00Z","interval":300,"status":"Accepted"}]
+> [2,"2","Heartbeat",{"customData":{"vendorId":"com.example.synth","uptime":12}}]
+< [3,"2",{"currentTime":"2026-11-07T12:00:10Z"}]

@@ -120,6 +120,8 @@ pub enum SessionEvent {
         version: Version,
         /// Where it connected from.
         remote: SocketAddr,
+        /// Whether RFC 7692 `permessage-deflate` was negotiated.
+        compressed: bool,
     },
     /// A station's session ended.
     Closed {
@@ -132,6 +134,29 @@ pub enum SessionEvent {
     Superseded {
         /// Which station.
         identity: Identity,
+    },
+    /// A station broke a protocol rule. Never fatal by itself; the session continues.
+    ///
+    /// The same event as the session's own [`Event::Violation`](super::Event::Violation),
+    /// lifted onto the fleet-wide stream so nothing has to subscribe per session (and miss
+    /// what happened before it did).
+    Violation {
+        /// Which station.
+        identity: Identity,
+        /// What it did.
+        violation: crate::engine::ProtocolViolation,
+    },
+    /// A station's payload decoded only because leniency forgave something — the
+    /// fleet-wide copy of the session's [`Event::Repaired`](super::Event::Repaired).
+    Repaired {
+        /// Which station.
+        identity: Identity,
+        /// The action the payload belongs to.
+        action: String,
+        /// The `MessageId` it arrived under.
+        id: crate::types::MessageId,
+        /// What was forgiven, and where.
+        repairs: Vec<crate::decode::Repair>,
     },
     /// A connection was refused during the handshake.
     Refused {
@@ -524,10 +549,14 @@ impl Csms {
         let identity = request.identity();
         let peer_certificate = socket.peer_certificate();
 
-        let profile = match (&peer_certificate, socket_is_tls(&socket)) {
-            (Some(_), _) => SecurityProfile::TlsClientCertificate,
-            (None, true) => SecurityProfile::TlsBasicAuth,
-            (None, false) => SecurityProfile::BasicAuth,
+        let authorization = request.header("authorization");
+        let profile = match (&peer_certificate, socket_is_tls(&socket), authorization) {
+            (Some(_), _, _) => SecurityProfile::TlsClientCertificate,
+            (None, true, _) => SecurityProfile::TlsBasicAuth,
+            (None, false, Some(_)) => SecurityProfile::BasicAuth,
+            // Plain transport and no credentials: say so, rather than report profile 1 to an
+            // authenticator that then has to notice `Credentials::None` itself.
+            (None, false, None) => SecurityProfile::Unsecured,
         };
 
         let Some(identity) = identity else {
@@ -538,9 +567,7 @@ impl Csms {
 
         let credentials = match peer_certificate {
             Some(der) => Credentials::ClientCertificate { der },
-            None => request
-                .header("authorization")
-                .map_or(Credentials::None, Credentials::from_authorization_header),
+            None => authorization.map_or(Credentials::None, Credentials::from_authorization_header),
         };
 
         // A00.FR.204 makes the Basic username the identity from the URL; A00.FR.207 makes
@@ -686,7 +713,9 @@ impl Csms {
         session: SessionContext,
     ) {
         let (commands_tx, mut commands_rx) = mpsc::channel(64);
-        let (events_tx, _) = broadcast::channel(256);
+        let (events_tx, session_events) = broadcast::channel(256);
+        // Subscribed before the driver starts, so nothing the session emits can be missed.
+        lift_to_fleet(session_events, self.events.clone(), identity.clone());
         let (state_tx, state_rx) = watch::channel(SessionState {
             connected: false,
             version,
@@ -751,6 +780,7 @@ impl Csms {
             identity: identity.clone(),
             version,
             remote,
+            compressed: socket.codec().is_compressed(),
         });
 
         let server = self.clone();
@@ -888,4 +918,40 @@ impl CsmsHandle {
             .map(|handle| async move { handle.shutdown(deadline).await });
         futures_util::future::join_all(drains).await;
     }
+}
+
+/// Lifts what an operator watches across a fleet — violations and repairs — from one
+/// session's channel onto the CSMS-wide stream, tagged with the station.
+fn lift_to_fleet(
+    mut session_events: broadcast::Receiver<super::Event>,
+    fleet: broadcast::Sender<SessionEvent>,
+    identity: Identity,
+) {
+    tokio::spawn(async move {
+        loop {
+            let event = match session_events.recv().await {
+                Ok(event) => event,
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => break,
+            };
+            let lifted = match event {
+                super::Event::Violation(violation) => SessionEvent::Violation {
+                    identity: identity.clone(),
+                    violation,
+                },
+                super::Event::Repaired {
+                    action,
+                    id,
+                    repairs,
+                } => SessionEvent::Repaired {
+                    identity: identity.clone(),
+                    action,
+                    id,
+                    repairs,
+                },
+                _ => continue,
+            };
+            let _ = fleet.send(lifted);
+        }
+    });
 }

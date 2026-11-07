@@ -23,7 +23,7 @@ $ cargo add ocpp-kit --features tokio,rustls
 | **L0** | `v1_6` · `v2_0_1` · `v2_1` | Typed, validated payloads for all **39 / 64 / 91** actions, generated from the official OCA JSON schemas | ✅ `alloc` |
 | **L1** | `rpc` | OCPP-J framing: `CALL`, `CALLRESULT`, `CALLERROR`, `CALLRESULTERROR`, `SEND`, with version-exact error codes, plus JWS signed messages | ✅ `alloc` |
 | **L2** | `engine` | A **sans-I/O** protocol engine: correlation, the one-outstanding-`CALL` rule, timeouts, transaction retries, the offline queue, the boot state machine | ✅ `alloc` |
-| **L3** | `transport` | Tokio + `rustls`, with its own RFC 6455 WebSocket and RFC 7692 compression: charging station, CSMS and local controller; security profiles 1–3; network failover | – |
+| **L3** | `transport` | Tokio + `rustls`, with its own RFC 6455 WebSocket and RFC 7692 compression: charging station, CSMS and local controller; security profiles 0 (1.6 only) to 3; network failover | – |
 | **L4** | `station` · `csms` | Opt-in blocks: device model, 1.6 configuration keys, transaction rules, local authorization, composite schedules, an idempotent CSMS ledger, version-agnostic events | partial |
 | — | `standard` | The catalogues that live outside the schemas: security events with their criticality, 74 standardized components, 448 variables, reason codes | ✅ `alloc` |
 | — | `metering` | Signed meter values: where each version hides the record a customer may be billed for, and how to read its public-key envelope | ✅ `alloc` |
@@ -147,7 +147,9 @@ connector the session is at.
 a session's energy, which OCPP *defines* as a difference of two registers, is that difference
 exactly rather than `10.000000000000002`; and unit conversion moves the decimal point instead
 of multiplying by `1000.0`. `cargo xtask no-floats` fails the build if an `f32` or `f64`
-reaches any public signature, and CI runs it.
+reaches any public signature, and CI runs it. Exact is still not billable: `Record::energy()`
+returns a `RegisterDelta` whose number is spelled `unverified_wh()` and which carries the
+signed meter records a calibration-law billing chain settles on.
 
 **The types are checked against the schemas.** Every action's request and response is
 round-tripped through pseudo-random schema-valid payloads in CI, and the result is validated
@@ -237,7 +239,16 @@ message timeout in production is a compile error.
 specification requires. `DecodeOptions::lenient()` additionally accepts the things field
 devices actually send — timestamps without an offset, `"42"` where a number belongs, enum
 values that are not in the schema — and it does so with a bounded *repair loop* that runs
-only after the strict parse has already failed, so conforming traffic costs nothing.
+only after the strict parse has already failed, so conforming traffic costs nothing. Every
+repair is **reported**, by JSON pointer and kind, and a CSMS sees them for its whole fleet as
+`SessionEvent::Repaired` — so tolerance is something an operator can count and take back to a
+vendor, not something that silently happens.
+
+**The schemas are the OCA's, checked.** `schemas/` holds the OCA packages byte for byte —
+`cargo xtask schemas-check` fails CI on any difference — and where the specification text is
+stricter than a schema the generator applies a cited patch that fails once the schema is
+fixed. Each file's JSON Schema draft decides what `integer` means, so `20000.0` is accepted
+where draft-06 says it is an integer (2.x) and not where draft-04 says it is not (1.6 core).
 
 ## `ocpp-cli`
 
@@ -294,10 +305,11 @@ $ cargo xtask codegen           # regenerate src/v1_6, src/v2_0_1, src/v2_1 from
 $ cargo xtask codegen --check   # what CI runs; fails if the committed code is stale
 $ cargo xtask schema-report     # action, enum and type counts per version
 $ cargo xtask schema-diff       # what actually differs between 2.0.1 and 2.1 (--check in CI)
-$ cargo xtask coverage          # which specification requirement IDs the tests cite
+$ cargo xtask coverage          # requirement IDs cited; fails on one Part 2 does not define
 $ cargo xtask coverage --profile all    # how much of each certification profile the tests drive
 $ cargo xtask appendix          # regenerate src/standard from Part 2 — Appendices
 $ cargo xtask no-floats         # fail if an f32/f64 reaches a public signature
+$ cargo xtask schemas-check     # fail if a vendored schema is not the OCA file SHA256SUMS records
 $ cargo xtask ci                # run what CI runs — commands *and* env — from the workflow
 $ cargo xtask ci --all          # …even the ones whose tooling looks to be missing
 $ cargo test --features full
@@ -309,7 +321,9 @@ connection, and a schema change shows up as a readable diff.
 ## JSON schemas
 
 The OCPP JSON schemas in [`schemas/`](schemas/) are published by the Open Charge Alliance and
-are redistributed unmodified; see [`schemas/NOTICE`](schemas/NOTICE). They are **not** covered
+are redistributed unmodified — OCPP 1.6 (all files & errata) with the Security Whitepaper
+edition 4, 2.0.1 edition 4, 2.1 edition 2 — and `schemas/SHA256SUMS` lists every file; see
+[`schemas/NOTICE`](schemas/NOTICE). They are **not** covered
 by this crate's license. The specification PDFs are not redistributed.
 
 ## License

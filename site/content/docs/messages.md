@@ -132,6 +132,12 @@ assert_eq!(request.action(), v2_1::Action::BootNotification);
 Asking `CsRequest` to decode a CSMS-originated action fails with `UnsupportedAction`, which
 maps to `NotSupported`. The direction check is free and happens before any payload parsing.
 
+Inside a [transport](@/docs/transport.md) handler, `ctx.decode::<v2_1::CsRequest>(&request)?`
+does all of this with the peer's configured `DecodeOptions` — and reports anything leniency
+had to forgive as an `Event::Repaired` (see [Interoperability](@/docs/interop.md)).
+`CsRequest::decode_reporting` and `decode::decode_payload_reporting` return the same list
+directly, as a `Decoded { value, repairs }`.
+
 ## Naming rules
 
 * `FooEnumType` → `Foo`; `FooType` → `Foo`.

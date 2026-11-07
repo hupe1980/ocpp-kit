@@ -6,19 +6,41 @@ as part of the Open Charge Point Protocol specifications and are
 redistributed here byte-for-byte unmodified. They are NOT covered by the
 MIT/Apache-2.0 licenses that apply to the Rust code in this repository.
 
-  schemas/v16/   OCPP 1.6 (edition 2 + errata) — 78 files, JSON Schema draft-04
-                 © Open Charge Alliance. Published with the OCPP 1.6 specification.
-  schemas/v201/  OCPP 2.0.1 FINAL — 128 files, JSON Schema draft-06
-                 © Open Charge Alliance. Published with OCPP 2.0.1 Part 2.
-  schemas/v21/   OCPP 2.1 Edition 1 — 181 files, JSON Schema draft-06
-                 (c) OCA, Creative Commons Attribution-NoDerivatives 4.0
-                 International Public License, as stated in each file's
-                 "comment" field.
+  v1_6/    OCPP 1.6 — 78 files
+           56 core files, JSON Schema draft-04, from "OCPP 1.6 (all files &
+           errata)" (errata sheet 2025-04: StopTransaction carries
+           `urn:OCPP:1.6:2025:04`), archive SHA-256
+           2a1d80284ca60449e85951fc55bc0538b5d45bd6f97c6d9228745acacb52c11b
+           22 security-extension files, draft-06, from "OCPP 1.6 Security
+           Whitepaper Edition 4", archive SHA-256
+           158b883e8ee712fd80fad3610b69fad355f7831d7a0ccdd996ce6b5452ce6859
+           © Open Charge Alliance.
+  v2_0_1/  OCPP 2.0.1 — 128 files, draft-06, from "OCPP 2.0.1 Edition 4
+           (all files)", OCPP-2.0.1_part3_JSON_schemas.zip (2020-03-31;
+           unchanged by editions 2–4 and errata 2026-09), archive SHA-256
+           9e025b7d0ef45deb221a7b0bb24b6eb0d199dce8927e1512a8aa75419f511a64
+           © Open Charge Alliance.
+  v2_1/    OCPP 2.1 — 181 files, draft-06, from "OCPP 2.1 Edition 2 (all
+           files)" (the files still say "Edition 1"; unchanged by errata
+           2026-09), archive SHA-256
+           2774ada26a709e3bf8680ee6721b3b215b8bc345dc6d8979b4c6b3d77f3a1f69
+           (c) OCA, Creative Commons Attribution-NoDerivatives 4.0
+           International Public License, as stated in each file's
+           "comment" field.
 
-Only the OCPP 2.1 files carry an explicit license statement. The 1.6 and
-2.0.1 files carry none, and are redistributed as they appear in the OCA
-publications and in https://github.com/mobilityhouse/ocpp (MIT), the source
-they were copied from on 2026-08-30. The OCPP specification PDFs are not
-redistributed with this repository.
+Provenance. The files were taken from
+https://github.com/otfabric/go-ocpp (schemas/, commit 191f845), which
+records each OCA download URL and archive SHA-256 in its UPSTREAM.json and
+every file's SHA-256 in its SHA256SUMS; every file here matched. The OCA
+download page is https://openchargealliance.org/my-oca/ocpp/.
+
+Where the specification text is stricter than a schema, the correction is
+applied by the code generator (`SchemaPatch` in xtask/src/schema.rs), cited,
+and never written into these files.
+
+Checked. `schemas/SHA256SUMS` lists every file; `cargo xtask schemas-check`
+(a CI job) fails if a file differs from it, or one is added or missing.
+
+The OCPP specification PDFs are not redistributed with this repository.
 
 Open Charge Alliance: https://openchargealliance.org/

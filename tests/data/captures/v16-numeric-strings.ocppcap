@@ -1,0 +1,7 @@
+# Integers sent as JSON strings ("1" for a connector id, "0" for a meter reading) — a known
+# habit of firmware that builds payloads from string templates.
+# Strict rejects; lenient (`NumericStrings::Coerce`) repairs.
+> [2,"1","StartTransaction",{"connectorId":"1","idTag":"SYNTH-TAG-01","meterStart":"0","timestamp":"2026-11-07T12:00:05Z"}]
+< [3,"1",{"transactionId":103,"idTagInfo":{"status":"Accepted"}}]
+> [2,"2","StatusNotification",{"connectorId":"1","errorCode":"NoError","status":"Charging"}]
+< [3,"2",{}]

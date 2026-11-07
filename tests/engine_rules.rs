@@ -240,7 +240,7 @@ fn responses_for_unknown_ids_are_dropped_and_reported() {
     let mut recorder = Recorder::new();
     engine.handle(NOW, Input::Received(r#"[3,"never-sent",{}]"#));
     recorder.drain(&mut engine);
-    assert!(recorder.frames().is_empty());
+    assert!(recorder.frames().is_empty(), "{:?}", recorder.frames());
     assert!(matches!(
         recorder.violations()[0],
         ProtocolViolation::UnexpectedResponse { .. }
@@ -488,7 +488,7 @@ fn a_csms_answers_an_unsolicited_call_from_a_pending_station_with_security_error
     ));
     recorder.drain(&mut csms);
     assert_eq!(recorder.requests().len(), 1);
-    assert!(recorder.frames().is_empty());
+    assert!(recorder.frames().is_empty(), "{:?}", recorder.frames());
 }
 
 #[test]
@@ -1118,7 +1118,7 @@ fn a_csms_serves_a_station_that_reconnects_without_repeating_boot_notification()
         "an unbooted station is served, not refused: {:?}",
         recorder.frames()
     );
-    assert!(recorder.frames().is_empty());
+    assert!(recorder.frames().is_empty(), "{:?}", recorder.frames());
 }
 
 /// `OCPPCommCtrlr.HeartbeatInterval` is "the interval of inactivity … after which the
@@ -1265,7 +1265,7 @@ fn a_peer_that_never_stops_calling_is_cut_off_at_the_configured_bound() {
     }
     csms.handle(NOW, Input::Received(r#"[2,"c4","Heartbeat",{}]"#));
     recorder.drain(&mut csms);
-    assert!(recorder.requests().is_empty());
+    assert!(recorder.requests().is_empty(), "{:?}", recorder.requests());
     assert!(
         recorder.only_frame().contains("ProtocolError"),
         "{:?}",

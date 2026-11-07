@@ -748,6 +748,74 @@ impl CsRequest {
         })
     }
 
+    /// [`decode`](Self::decode), also returning every [`Repair`](crate::decode::Repair)
+    /// the lenient options applied.
+    pub fn decode_reporting(
+        action: Action,
+        payload: &RawValue,
+        options: &DecodeOptions,
+    ) -> Result<crate::decode::Decoded<Self>, DecodeError> {
+        Ok(match action {
+            Action::Authorize => {
+                crate::decode::decode_payload_reporting::<AuthorizeRequest>(payload, options)?
+                    .map(Self::Authorize)
+            }
+            Action::BootNotification => crate::decode::decode_payload_reporting::<
+                BootNotificationRequest,
+            >(payload, options)?
+            .map(Self::BootNotification),
+            Action::DataTransfer => {
+                crate::decode::decode_payload_reporting::<DataTransferRequest>(payload, options)?
+                    .map(Self::DataTransfer)
+            }
+            Action::DiagnosticsStatusNotification => crate::decode::decode_payload_reporting::<
+                DiagnosticsStatusNotificationRequest,
+            >(payload, options)?
+            .map(Self::DiagnosticsStatusNotification),
+            Action::FirmwareStatusNotification => crate::decode::decode_payload_reporting::<
+                FirmwareStatusNotificationRequest,
+            >(payload, options)?
+            .map(Self::FirmwareStatusNotification),
+            Action::Heartbeat => {
+                crate::decode::decode_payload_reporting::<HeartbeatRequest>(payload, options)?
+                    .map(Self::Heartbeat)
+            }
+            Action::LogStatusNotification => crate::decode::decode_payload_reporting::<
+                LogStatusNotificationRequest,
+            >(payload, options)?
+            .map(Self::LogStatusNotification),
+            Action::MeterValues => {
+                crate::decode::decode_payload_reporting::<MeterValuesRequest>(payload, options)?
+                    .map(Self::MeterValues)
+            }
+            Action::SecurityEventNotification => crate::decode::decode_payload_reporting::<
+                SecurityEventNotificationRequest,
+            >(payload, options)?
+            .map(Self::SecurityEventNotification),
+            Action::SignCertificate => {
+                crate::decode::decode_payload_reporting::<SignCertificateRequest>(payload, options)?
+                    .map(Self::SignCertificate)
+            }
+            Action::SignedFirmwareStatusNotification => crate::decode::decode_payload_reporting::<
+                SignedFirmwareStatusNotificationRequest,
+            >(payload, options)?
+            .map(Self::SignedFirmwareStatusNotification),
+            Action::StartTransaction => crate::decode::decode_payload_reporting::<
+                StartTransactionRequest,
+            >(payload, options)?
+            .map(Self::StartTransaction),
+            Action::StatusNotification => crate::decode::decode_payload_reporting::<
+                StatusNotificationRequest,
+            >(payload, options)?
+            .map(Self::StatusNotification),
+            Action::StopTransaction => {
+                crate::decode::decode_payload_reporting::<StopTransactionRequest>(payload, options)?
+                    .map(Self::StopTransaction)
+            }
+            other => return Err(DecodeError::unsupported_action(other.as_str())),
+        })
+    }
+
     /// Serializes the payload object (without the OCPP-J frame).
     pub fn to_json(&self) -> Result<alloc::string::String, serde_json::Error> {
         match self {
@@ -808,6 +876,20 @@ impl serde::Serialize for CsRequest {
             Self::StatusNotification(p) => p.serialize(ser),
             Self::StopTransaction(p) => p.serialize(ser),
         }
+    }
+}
+
+impl crate::message::Sealed for CsRequest {}
+
+impl crate::message::DecodeRequest for CsRequest {
+    type Action = Action;
+
+    fn decode_reporting(
+        action: Action,
+        payload: &RawValue,
+        options: &DecodeOptions,
+    ) -> Result<crate::decode::Decoded<Self>, DecodeError> {
+        CsRequest::decode_reporting(action, payload, options)
     }
 }
 
@@ -1198,6 +1280,122 @@ impl CsmsRequest {
         })
     }
 
+    /// [`decode`](Self::decode), also returning every [`Repair`](crate::decode::Repair)
+    /// the lenient options applied.
+    pub fn decode_reporting(
+        action: Action,
+        payload: &RawValue,
+        options: &DecodeOptions,
+    ) -> Result<crate::decode::Decoded<Self>, DecodeError> {
+        Ok(match action {
+            Action::CancelReservation => crate::decode::decode_payload_reporting::<
+                CancelReservationRequest,
+            >(payload, options)?
+            .map(Self::CancelReservation),
+            Action::CertificateSigned => crate::decode::decode_payload_reporting::<
+                CertificateSignedRequest,
+            >(payload, options)?
+            .map(Self::CertificateSigned),
+            Action::ChangeAvailability => crate::decode::decode_payload_reporting::<
+                ChangeAvailabilityRequest,
+            >(payload, options)?
+            .map(Self::ChangeAvailability),
+            Action::ChangeConfiguration => crate::decode::decode_payload_reporting::<
+                ChangeConfigurationRequest,
+            >(payload, options)?
+            .map(Self::ChangeConfiguration),
+            Action::ClearCache => {
+                crate::decode::decode_payload_reporting::<ClearCacheRequest>(payload, options)?
+                    .map(Self::ClearCache)
+            }
+            Action::ClearChargingProfile => crate::decode::decode_payload_reporting::<
+                ClearChargingProfileRequest,
+            >(payload, options)?
+            .map(Self::ClearChargingProfile),
+            Action::DataTransfer => {
+                crate::decode::decode_payload_reporting::<DataTransferRequest>(payload, options)?
+                    .map(Self::DataTransfer)
+            }
+            Action::DeleteCertificate => crate::decode::decode_payload_reporting::<
+                DeleteCertificateRequest,
+            >(payload, options)?
+            .map(Self::DeleteCertificate),
+            Action::ExtendedTriggerMessage => crate::decode::decode_payload_reporting::<
+                ExtendedTriggerMessageRequest,
+            >(payload, options)?
+            .map(Self::ExtendedTriggerMessage),
+            Action::GetCompositeSchedule => crate::decode::decode_payload_reporting::<
+                GetCompositeScheduleRequest,
+            >(payload, options)?
+            .map(Self::GetCompositeSchedule),
+            Action::GetConfiguration => crate::decode::decode_payload_reporting::<
+                GetConfigurationRequest,
+            >(payload, options)?
+            .map(Self::GetConfiguration),
+            Action::GetDiagnostics => {
+                crate::decode::decode_payload_reporting::<GetDiagnosticsRequest>(payload, options)?
+                    .map(Self::GetDiagnostics)
+            }
+            Action::GetInstalledCertificateIds => crate::decode::decode_payload_reporting::<
+                GetInstalledCertificateIdsRequest,
+            >(payload, options)?
+            .map(Self::GetInstalledCertificateIds),
+            Action::GetLocalListVersion => crate::decode::decode_payload_reporting::<
+                GetLocalListVersionRequest,
+            >(payload, options)?
+            .map(Self::GetLocalListVersion),
+            Action::GetLog => {
+                crate::decode::decode_payload_reporting::<GetLogRequest>(payload, options)?
+                    .map(Self::GetLog)
+            }
+            Action::InstallCertificate => crate::decode::decode_payload_reporting::<
+                InstallCertificateRequest,
+            >(payload, options)?
+            .map(Self::InstallCertificate),
+            Action::RemoteStartTransaction => crate::decode::decode_payload_reporting::<
+                RemoteStartTransactionRequest,
+            >(payload, options)?
+            .map(Self::RemoteStartTransaction),
+            Action::RemoteStopTransaction => crate::decode::decode_payload_reporting::<
+                RemoteStopTransactionRequest,
+            >(payload, options)?
+            .map(Self::RemoteStopTransaction),
+            Action::ReserveNow => {
+                crate::decode::decode_payload_reporting::<ReserveNowRequest>(payload, options)?
+                    .map(Self::ReserveNow)
+            }
+            Action::Reset => {
+                crate::decode::decode_payload_reporting::<ResetRequest>(payload, options)?
+                    .map(Self::Reset)
+            }
+            Action::SendLocalList => {
+                crate::decode::decode_payload_reporting::<SendLocalListRequest>(payload, options)?
+                    .map(Self::SendLocalList)
+            }
+            Action::SetChargingProfile => crate::decode::decode_payload_reporting::<
+                SetChargingProfileRequest,
+            >(payload, options)?
+            .map(Self::SetChargingProfile),
+            Action::SignedUpdateFirmware => crate::decode::decode_payload_reporting::<
+                SignedUpdateFirmwareRequest,
+            >(payload, options)?
+            .map(Self::SignedUpdateFirmware),
+            Action::TriggerMessage => {
+                crate::decode::decode_payload_reporting::<TriggerMessageRequest>(payload, options)?
+                    .map(Self::TriggerMessage)
+            }
+            Action::UnlockConnector => {
+                crate::decode::decode_payload_reporting::<UnlockConnectorRequest>(payload, options)?
+                    .map(Self::UnlockConnector)
+            }
+            Action::UpdateFirmware => {
+                crate::decode::decode_payload_reporting::<UpdateFirmwareRequest>(payload, options)?
+                    .map(Self::UpdateFirmware)
+            }
+            other => return Err(DecodeError::unsupported_action(other.as_str())),
+        })
+    }
+
     /// Serializes the payload object (without the OCPP-J frame).
     pub fn to_json(&self) -> Result<alloc::string::String, serde_json::Error> {
         match self {
@@ -1294,6 +1492,20 @@ impl serde::Serialize for CsmsRequest {
             Self::UnlockConnector(p) => p.serialize(ser),
             Self::UpdateFirmware(p) => p.serialize(ser),
         }
+    }
+}
+
+impl crate::message::Sealed for CsmsRequest {}
+
+impl crate::message::DecodeRequest for CsmsRequest {
+    type Action = Action;
+
+    fn decode_reporting(
+        action: Action,
+        payload: &RawValue,
+        options: &DecodeOptions,
+    ) -> Result<crate::decode::Decoded<Self>, DecodeError> {
+        CsmsRequest::decode_reporting(action, payload, options)
     }
 }
 

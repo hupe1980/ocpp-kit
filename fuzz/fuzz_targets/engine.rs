@@ -7,12 +7,19 @@ use ocpp_kit::Version;
 use ocpp_kit::engine::{Engine, EngineConfig, Input, Instant, Output, Role};
 
 fuzz_target!(|data: &[u8]| {
-    let Ok(text) = core::str::from_utf8(data) else { return };
+    let Ok(text) = core::str::from_utf8(data) else {
+        return;
+    };
 
     for role in [Role::ChargingStation, Role::Csms] {
         let mut engine = Engine::new(EngineConfig::new(role, Version::V2_1));
         let mut clock = 0u64;
-        engine.handle(Instant::from_millis(clock), Input::Connected { version: Version::V2_1 });
+        engine.handle(
+            Instant::from_millis(clock),
+            Input::Connected {
+                version: Version::V2_1,
+            },
+        );
 
         for line in text.lines() {
             engine.handle(Instant::from_millis(clock), Input::Received(line));

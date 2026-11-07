@@ -16,12 +16,12 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::value::RawValue;
 use tokio::sync::{Semaphore, broadcast, mpsc, oneshot, watch};
 
-use crate::decode::DecodeOptions;
+use crate::decode::{DecodeOptions, Repair};
 use crate::engine::{
     Answer, BootState, CallFailure, CallOptions, CallToken, ClockSample, CloseReason, Engine,
     Input, Instant, MessageStore, Output, ProtocolViolation, Timer,
 };
-use crate::message::{ActionName, Confirmed, NoResponse, Request, Unconfirmed};
+use crate::message::{ActionName, Confirmed, DecodeRequest, NoResponse, Request, Unconfirmed};
 use crate::rpc::CallError;
 use crate::types::{Identity, MessageId};
 use crate::version::Version;
@@ -113,11 +113,15 @@ pub enum Event {
     Connected {
         /// The negotiated version.
         version: Version,
+        /// Whether RFC 7692 `permessage-deflate` was negotiated.
+        compressed: bool,
     },
     /// The connection ended.
     Disconnected {
         /// Why, for logging.
         reason: String,
+        /// The close frame the peer sent, when it sent one — its code and reason, verbatim.
+        peer_close: Option<CloseFrame>,
     },
     /// The boot state machine moved.
     BootState(BootState),
@@ -147,6 +151,21 @@ pub enum Event {
         attempt: u32,
         /// How long the station will wait.
         delay: Duration,
+    },
+    /// A payload from the peer decoded only because leniency forgave something.
+    ///
+    /// Emitted by [`Ctx::decode`] for a request and by [`Handle::call`] for a response; a
+    /// conforming payload emits nothing. Count these per [`RepairKind`] and identity to know
+    /// what a fleet actually sends.
+    ///
+    /// [`RepairKind`]: crate::decode::RepairKind
+    Repaired {
+        /// The action the payload belongs to.
+        action: String,
+        /// The `MessageId` it arrived under.
+        id: MessageId,
+        /// What was forgiven, and where.
+        repairs: Vec<Repair>,
     },
 }
 
@@ -257,6 +276,30 @@ pub(crate) struct Shared {
     pub state: watch::Receiver<SessionState>,
 }
 
+impl Shared {
+    /// Publishes what leniency forgave in one payload. Nothing for a conforming one.
+    pub(crate) fn report_repairs(&self, action: &str, id: &MessageId, repairs: Vec<Repair>) {
+        if repairs.is_empty() {
+            return;
+        }
+        #[cfg(feature = "tracing")]
+        for repair in &repairs {
+            tracing::debug!(
+                identity = %self.identity,
+                action,
+                pointer = %repair.pointer,
+                kind = repair.kind.as_str(),
+                "lenient decode repaired a member"
+            );
+        }
+        let _ = self.events.send(Event::Repaired {
+            action: action.to_owned(),
+            id: id.clone(),
+            repairs,
+        });
+    }
+}
+
 /// Everything a handler needs: who the peer is, what was negotiated, and a way to call back.
 #[derive(Clone)]
 pub struct Ctx {
@@ -312,6 +355,36 @@ impl Ctx {
     #[must_use]
     pub fn decode_options(&self) -> &DecodeOptions {
         &self.shared.decode
+    }
+
+    /// Decodes the request being handled into this side's request union, with this peer's
+    /// [`DecodeOptions`], and reports anything leniency forgave as [`Event::Repaired`].
+    ///
+    /// The one call a handler needs before matching:
+    ///
+    /// ```no_run
+    /// # use ocpp_kit::{RawValue, engine::IncomingRequest, rpc::CallError, v2_1};
+    /// # fn example(ctx: ocpp_kit::transport::Ctx, request: IncomingRequest) -> Result<Box<RawValue>, CallError> {
+    /// match ctx.decode::<v2_1::CsRequest>(&request)? {
+    ///     v2_1::CsRequest::Heartbeat(_) => ctx.reply(&v2_1::HeartbeatResponse::new(
+    ///         ocpp_kit::types::DateTime::now(),
+    ///     )),
+    ///     other => Err(CallError::not_supported(other.action().as_str())),
+    /// }
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// `NotImplemented` for an action this version does not define, and otherwise the
+    /// [`CallError`] the specification names for the decode failure.
+    pub fn decode<U: DecodeRequest>(&self, request: &IncomingRequest) -> Result<U, CallError> {
+        let action = U::Action::from_wire(&request.action)
+            .ok_or_else(|| CallError::not_implemented(&request.action))?;
+        let decoded = U::decode_reporting(action, &request.payload, &self.shared.decode)?;
+        self.shared
+            .report_repairs(&request.action, &request.id, decoded.repairs);
+        Ok(decoded.value)
     }
 
     /// A handle for calling the peer back, including from inside a handler.
@@ -449,8 +522,14 @@ impl Handle {
                 "a CALL was completed as a SEND",
             )));
         };
-        match crate::decode::decode_payload::<R::Response>(&raw, &self.shared.decode) {
-            Ok(response) => Ok(response),
+        match crate::decode::decode_payload_reporting::<R::Response>(&raw, &self.shared.decode) {
+            Ok(decoded) => {
+                if let Some(id) = &id {
+                    self.shared
+                        .report_repairs(R::ACTION.as_str(), id, decoded.repairs);
+                }
+                Ok(decoded.value)
+            }
             Err(error) => {
                 let error = CallError::from(error);
                 // Part 4 §4.2.3: on 2.1 the sender of an unusable `CALLRESULT` is told so
@@ -589,6 +668,8 @@ pub(crate) struct Driver<S: MessageStore> {
     /// The engine already caps the peer's unanswered calls; this caps the *work* they can
     /// start, so one talkative station cannot occupy the runtime on behalf of the rest.
     slots: Arc<Semaphore>,
+    /// The close frame the peer sent on the current connection, for `Event::Disconnected`.
+    peer_close: Option<CloseFrame>,
 }
 
 /// How the driver watches for a connection that has died without saying so.
@@ -656,6 +737,7 @@ impl<S: MessageStore> Driver<S> {
             pending: HashMap::new(),
             timers: BTreeMap::new(),
             slots: Arc::new(Semaphore::new(MAX_CONCURRENT_HANDLERS)),
+            peer_close: None,
         }
     }
 
@@ -679,11 +761,16 @@ impl<S: MessageStore> Driver<S> {
     where
         St: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
     {
+        let compressed = socket.codec().is_compressed();
         let (mut sink, mut stream) = socket.split();
+        self.peer_close = None;
 
         self.engine.handle(self.now(), Input::Connected { version });
         self.publish(true, version);
-        let _ = self.shared.events.send(Event::Connected { version });
+        let _ = self.shared.events.send(Event::Connected {
+            version,
+            compressed,
+        });
 
         let mut ping = keepalive.interval.map(|interval| {
             let mut timer = tokio::time::interval(interval);
@@ -762,7 +849,10 @@ impl<S: MessageStore> Driver<S> {
             Ended::Closed(why) => format!("{why:?}"),
         };
         self.publish(false, version);
-        let _ = self.shared.events.send(Event::Disconnected { reason });
+        let _ = self.shared.events.send(Event::Disconnected {
+            reason,
+            peer_close: self.peer_close.take(),
+        });
         if matches!(ended, Ended::Closed(_)) {
             let _ = sink
                 .send(Message::Close(Some(CloseFrame::new(CloseCode::NORMAL, ""))))
@@ -802,7 +892,8 @@ impl<S: MessageStore> Driver<S> {
                     |frame| format!("peer closed: {} {}", frame.code, frame.reason),
                 );
                 // §5.5.1: echo the close, then stop.
-                let echo = frame.map(|frame| CloseFrame::new(frame.code, ""));
+                let echo = frame.as_ref().map(|frame| CloseFrame::new(frame.code, ""));
+                self.peer_close = frame;
                 let _ = sink.send(Message::Close(echo)).await;
                 Some(Ended::Disconnected(reason))
             }

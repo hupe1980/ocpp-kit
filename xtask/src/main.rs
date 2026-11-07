@@ -4,7 +4,12 @@
 //! cargo xtask codegen [--check]   regenerate src/v1_6, src/v2_0_1, src/v2_1 from schemas/
 //! cargo xtask schema-report       action / type counts per version
 //! cargo xtask schema-diff [--check]  what actually differs between 2.0.1 and 2.1
-//! cargo xtask coverage [--block B] requirement-ID coverage from the test suite
+//! cargo xtask requirements [--check]  extract the Part 2 requirement ids into
+//!                                xtask/data/requirements (needs the local OCA text)
+//! cargo xtask coverage [--block B] [--use-cases] [--uncited] [--edition E]
+//!                                [--profile NAME|all]
+//!                                requirement-ID coverage; fails on a cited id that does
+//!                                not exist
 //! cargo xtask doctest-site       compile and run every Rust snippet on the website and in
 //!                                the README
 //! cargo xtask no-floats          fail if any public signature names f32/f64
@@ -16,12 +21,15 @@ mod appendix;
 mod ci;
 mod emit;
 mod floats;
+mod footprint;
 mod model;
 mod naming;
 mod profiles;
 mod registry;
+mod requirements;
 mod schema;
 mod schema_diff;
+mod schemas_check;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -41,16 +49,21 @@ fn main() -> Result<()> {
         "appendix" => appendix_codegen(flags.contains("--check")),
         "schema-report" => schema_report(),
         "schema-diff" => schema_diff::run(&root().join("schemas"), flags.contains("--check")),
+        "requirements" => requirements::run(&root(), flags.contains("--check")),
         "coverage" => coverage(&args[1..]),
         "doctest-site" => doctest_site(),
         "no-floats" => floats::run(),
+        "schemas-check" => schemas_check::run(&root().join("schemas")),
         "ci" => ci::run(flags.contains("--all")),
+        "footprint" => footprint::run(&root(), &args[1..]),
         _ => {
             println!("{}", env!("CARGO_PKG_NAME"));
             println!(
                 "usage: cargo xtask <codegen [--check] | appendix [--check] | schema-report \
-                        | schema-diff [--check] | coverage [--block <B>] [--profile <NAME>] \
-                        | doctest-site | no-floats | ci [--all]>"
+                        | schema-diff [--check] | requirements [--check] \
+                        | coverage [--block <B>] [--use-cases] [--uncited] [--edition <E>] \
+                          [--profile <NAME>] \
+                        | doctest-site | no-floats | schemas-check | footprint [--bench] [--out FILE] | ci [--all]>"
             );
             Ok(())
         }
@@ -251,8 +264,8 @@ fn appendix_codegen(check: bool) -> Result<()> {
     let source = appendix::source_path(&root);
     if !source.exists() {
         bail!(
-            "{} is missing. Extract it first:\n  \
-             pdftotext -layout specs/ocpp-2.1/OCPP-2.1_part2_appendices_v20.pdf {}",
+            "{} is missing. Extract it first (or point OCPP_APPENDIX at an extracted copy):\n  \
+             pdftotext -layout OCPP-2.1_part2_appendices_v20.pdf {}",
             source.display(),
             source.display()
         );
@@ -344,92 +357,185 @@ fn schema_report() -> Result<()> {
     Ok(())
 }
 
-/// Reports which specification requirement IDs (`B02.FR.02`, `N15.FR.01`, …) are referenced
-/// by the source and the test suite, and — with `--profile` — how much of a certification
-/// profile the tests reach.
+/// Reports which specification requirement IDs (`B02.FR.02`, `N15.FR.01`, …) the source and
+/// the test suite cite, and how many of each use case's and each certification profile's
+/// requirements that is.
+///
+/// Every cited id is checked against the committed extraction of Part 2
+/// (`xtask/data/requirements/`, written by `cargo xtask requirements`): an id that exists in
+/// neither edition it could refer to fails the command, naming the file and line. The check
+/// reads only committed files, so it runs in CI without the OCA text.
 fn coverage(args: &[String]) -> Result<()> {
-    let filter = args
-        .iter()
-        .position(|a| a == "--block")
-        .and_then(|i| args.get(i + 1))
-        .map(String::as_str);
-    let profile = args
-        .iter()
-        .position(|a| a == "--profile")
-        .and_then(|i| args.get(i + 1))
-        .map(String::as_str);
-
-    if let Some(profile) = profile {
-        if profile == "all" {
-            return all_profiles();
-        }
-        return profile_coverage(profile);
-    }
-
-    let root = root();
-    let mut found: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let pattern = |s: &str| -> Vec<String> {
-        let bytes = s.as_bytes();
-        let mut ids = Vec::new();
-        for (i, _) in s.match_indices(".FR.") {
-            // walk left over the block id, right over the digits
-            let mut start = i;
-            while start > 0 && bytes[start - 1].is_ascii_alphanumeric() {
-                start -= 1;
-            }
-            let mut end = i + 4;
-            while end < bytes.len() && bytes[end].is_ascii_alphanumeric() {
-                end += 1;
-            }
-            if end > i + 4 && start < i {
-                ids.push(s[start..end].to_string());
-            }
-        }
-        ids
+    let value = |flag: &str| {
+        args.iter()
+            .position(|a| a == flag)
+            .and_then(|i| args.get(i + 1))
+            .map(String::as_str)
+    };
+    let filter = value("--block");
+    let profile = value("--profile");
+    let uncited = args.iter().any(|a| a == "--uncited");
+    let by_use_case = uncited || args.iter().any(|a| a == "--use-cases");
+    let editions: Vec<requirements::Edition> = match value("--edition") {
+        None => requirements::Edition::ALL.to_vec(),
+        Some("2.0.1") => vec![requirements::Edition::V2_0_1],
+        Some("2.1") => vec![requirements::Edition::V2_1],
+        Some(other) => bail!("unknown edition {other:?}; use 2.0.1 or 2.1"),
     };
 
+    let root = root();
+    let data = requirements::load_all(&root)?;
+    let citations = scan_citations(&root)?;
+    check_citations_exist(&data, &citations)?;
+    let cited =
+        requirements::cited_per_edition(&data, citations.iter().map(|(p, c)| (p.as_path(), c)));
+    let empty = BTreeSet::new();
+    let cited_in = |edition| cited.get(&edition).unwrap_or(&empty);
+
+    if let Some(profile) = profile {
+        let part5 = requirements::Edition::V2_0_1;
+        if profile == "all" {
+            return all_profiles(&data[&part5], cited_in(part5));
+        }
+        return profile_coverage(profile, &data[&part5], cited_in(part5), uncited);
+    }
+
+    if by_use_case {
+        for edition in editions {
+            println!("{} Part 2\n", edition.label());
+            let keep = |id: &str| filter.is_none_or(|f| id.starts_with(f));
+            let (n, m) = use_case_report(&data[&edition], cited_in(edition), &keep, uncited);
+            println!("\n  {n}/{m} requirement(s) cited\n");
+        }
+        return Ok(());
+    }
+
+    let mut found: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    for (path, citation) in &citations {
+        let rel = path.display().to_string();
+        let entry = found.entry(&citation.id).or_default();
+        if !entry.contains(&rel) {
+            entry.push(rel);
+        }
+    }
+    let mut shown = 0;
+    for (id, files) in &found {
+        if filter.is_some_and(|f| !id.starts_with(f)) {
+            continue;
+        }
+        shown += 1;
+        let editions: Vec<&str> = requirements::Edition::ALL
+            .iter()
+            .filter(|e| data[e].contains(id))
+            .map(|e| e.label().trim_start_matches("OCPP "))
+            .collect();
+        println!("{id:<14} {:<11} {}", editions.join(" "), files.join(", "));
+    }
+    println!("\n{shown} requirement ID(s) referenced, every one of them defined in Part 2");
+    for edition in requirements::Edition::ALL {
+        println!(
+            "  {}: {}/{} requirement(s) cited",
+            edition.label(),
+            cited_in(edition).len(),
+            data[&edition].len()
+        );
+    }
+    println!("  (`--use-cases` for n/m per use case, `--uncited` to list what is not cited)");
+    Ok(())
+}
+
+/// Every requirement-id citation in `src/` and `tests/`, with the path relative to the root.
+fn scan_citations(root: &Path) -> Result<Vec<(PathBuf, requirements::Citation)>> {
+    let mut out = Vec::new();
     for dir in ["src", "tests"] {
         visit(&root.join(dir), &mut |path| {
             if path.extension().is_some_and(|e| e == "rs") {
                 let text = std::fs::read_to_string(path)?;
-                let rel = path
-                    .strip_prefix(&root)
-                    .unwrap_or(path)
-                    .display()
-                    .to_string();
-                for id in pattern(&text) {
-                    let entry = found.entry(id).or_default();
-                    if !entry.contains(&rel) {
-                        entry.push(rel.clone());
-                    }
+                let rel = path.strip_prefix(root).unwrap_or(path).to_path_buf();
+                for citation in requirements::citations(&text) {
+                    out.push((rel.clone(), citation));
                 }
             }
             Ok(())
         })?;
     }
+    out.sort_by(|a, b| (&a.0, a.1.line).cmp(&(&b.0, b.1.line)));
+    Ok(out)
+}
 
-    let mut shown = 0;
-    for (id, files) in &found {
-        if let Some(f) = filter {
-            if !id.starts_with(f) {
-                continue;
-            }
-        }
-        shown += 1;
-        println!("{id:<14} {}", files.join(", "));
+/// Fails, naming `file:line` and the id, on any citation of an id that the editions the
+/// file can refer to do not define.
+fn check_citations_exist(
+    data: &BTreeMap<requirements::Edition, requirements::Requirements>,
+    citations: &[(PathBuf, requirements::Citation)],
+) -> Result<()> {
+    let unknown = requirements::unknown_citations(data, citations);
+    if !unknown.is_empty() {
+        bail!(
+            "{} citation(s) of requirement ids that do not exist:\n  {}\n\
+             (ids from xtask/data/requirements/, extracted by `cargo xtask requirements`)",
+            unknown.len(),
+            unknown.join("\n  ")
+        );
     }
-    println!("\n{shown} requirement ID(s) referenced");
     Ok(())
 }
 
-/// Reports how much of one OCPP 2.0.1 certification profile the test suite exercises.
-///
-/// "Exercised" means the action's name appears in `tests/` — which is a coverage *signal*,
-/// not a certification. Certification is a test-lab activity against the OCA test tool; this
-/// is the question you can answer in CI on the way there.
-/// One line per certification profile — the summary worth quoting.
-fn all_profiles() -> Result<()> {
-    let root = root();
+/// Prints n/m per use case for the use cases `keep` admits; returns the totals.
+fn use_case_report(
+    requirements: &requirements::Requirements,
+    cited: &BTreeSet<String>,
+    keep: &dyn Fn(&str) -> bool,
+    list_uncited: bool,
+) -> (usize, usize) {
+    let (mut total_cited, mut total) = (0, 0);
+    for (key, use_case) in &requirements.use_cases {
+        if !keep(&key.id) {
+            continue;
+        }
+        let n = use_case.ids.iter().filter(|id| cited.contains(*id)).count();
+        let m = use_case.ids.len();
+        total_cited += n;
+        total += m;
+        let mark = match (n, m) {
+            (_, 0) => "-",
+            (n, m) if n == m => "x",
+            (0, _) => " ",
+            _ => "~",
+        };
+        let title: String = use_case.title.chars().take(52).collect();
+        println!("  [{mark}] {:<4} {title:<52} {n:>3}/{m}", key.id);
+        if list_uncited && n < m {
+            let missing: Vec<&str> = use_case
+                .ids
+                .iter()
+                .filter(|id| !cited.contains(*id))
+                .map(String::as_str)
+                .collect();
+            for chunk in missing.chunks(6) {
+                println!("          {}", chunk.join(" "));
+            }
+        }
+    }
+    (total_cited, total)
+}
+
+/// The requirements of a profile's use cases, and how many of them are cited.
+fn profile_requirements(
+    slug: &str,
+    requirements: &requirements::Requirements,
+    cited: &BTreeSet<String>,
+) -> (usize, usize) {
+    requirements::profile_use_cases(slug)
+        .iter()
+        .filter_map(|uc| requirements.use_case(uc))
+        .flat_map(|uc| &uc.ids)
+        .fold((0, 0), |(n, m), id| {
+            (n + usize::from(cited.contains(id)), m + 1)
+        })
+}
+
+fn test_corpus(root: &Path) -> Result<String> {
     let mut corpus = String::new();
     visit(&root.join("tests"), &mut |path| {
         if path.extension().is_some_and(|e| e == "rs") {
@@ -437,8 +543,20 @@ fn all_profiles() -> Result<()> {
         }
         Ok(())
     })?;
+    Ok(corpus)
+}
+
+/// One line per certification profile — the summary worth quoting.
+///
+/// "Driven" means a scenario test names the action in code; "cited" means the source or a
+/// test names the requirement id. Both are coverage *signals*, not a certification.
+/// Certification is a test-lab activity against the OCA test tool; this is the question you
+/// can answer in CI on the way there.
+fn all_profiles(requirements: &requirements::Requirements, cited: &BTreeSet<String>) -> Result<()> {
+    let corpus = test_corpus(&root())?;
 
     println!("Certification profiles (OCPP 2.0.1 Part 5)\n");
+    println!("  {:<40} {:>9} {:>14}", "", "actions", "requirements");
     let (mut total, mut total_covered) = (0, 0);
     for profile in profiles::PROFILES {
         let covered = profile
@@ -453,20 +571,32 @@ fn all_profiles() -> Result<()> {
         } else {
             " "
         };
+        let (n, m) = profile_requirements(profile.slug, requirements, cited);
         println!(
-            "  [{mark}] {:<30} {covered}/{}",
+            "  [{mark}] {:<36} {:>9} {:>14}",
             profile.name,
-            profile.actions.len()
+            format!("{covered}/{}", profile.actions.len()),
+            format!("{n}/{m}"),
         );
     }
     println!("\n  {total_covered}/{total} action(s) driven by a scenario test");
     println!(
-        "  (a coverage signal, not a certification: that is a test-lab activity against the\n            OCA test tool. See concepts/QUALITY.md.)"
+        "  requirements: ids of the profile's Part 2 use cases that the source or a test cites\n  \
+         (`--profile <name> --uncited` lists the rest)"
+    );
+    println!(
+        "  (a coverage signal, not a certification: that is a test-lab activity against the\n            OCA test tool.)"
     );
     Ok(())
 }
 
-fn profile_coverage(name: &str) -> Result<()> {
+/// Reports how much of one OCPP 2.0.1 certification profile the test suite exercises.
+fn profile_coverage(
+    name: &str,
+    requirements: &requirements::Requirements,
+    cited: &BTreeSet<String>,
+    list_uncited: bool,
+) -> Result<()> {
     let Some(profile) = profiles::find(name) else {
         let names: Vec<&str> = profiles::PROFILES.iter().map(|p| p.slug).collect();
         bail!(
@@ -476,13 +606,7 @@ fn profile_coverage(name: &str) -> Result<()> {
     };
 
     let root = root();
-    let mut corpus = String::new();
-    visit(&root.join("tests"), &mut |path| {
-        if path.extension().is_some_and(|e| e == "rs") {
-            corpus.push_str(&strip_comments(&std::fs::read_to_string(path)?));
-        }
-        Ok(())
-    })?;
+    let corpus = test_corpus(&root)?;
 
     println!("{} (OCPP 2.0.1 Part 5)\n", profile.name);
     let mut covered = 0;
@@ -501,6 +625,15 @@ fn profile_coverage(name: &str) -> Result<()> {
     println!(
         "  (every action of every version is exercised by the schema conformance suite; this\n              counts the ones a *scenario* test drives, which is what certification asks about.\n              Comments are stripped before matching: an action named in prose is not a test.)"
     );
+
+    println!("\n  requirements of the profile's use cases (OCPP 2.0.1 Part 2):");
+    let use_cases = requirements::profile_use_cases(profile.slug);
+    let keep = |id: &str| use_cases.contains(&id);
+    let (n, m) = use_case_report(requirements, cited, &keep, list_uncited);
+    println!("\n  {n}/{m} requirement(s) cited by the source or a test");
+    if !list_uncited && n < m {
+        println!("  (`--uncited` lists the ids no one cites)");
+    }
 
     if !profile.components.is_empty() {
         println!("\n  mandatory controller components (Part 5 §5):");

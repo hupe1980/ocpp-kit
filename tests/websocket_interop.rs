@@ -43,9 +43,7 @@ impl Handler for Accepting {
         request: IncomingRequest,
     ) -> BoxFuture<'_, Result<Box<RawValue>, CallError>> {
         Box::pin(async move {
-            let action = v2_1::Action::from_wire(&request.action)
-                .ok_or_else(|| CallError::not_implemented(&request.action))?;
-            match v2_1::CsRequest::decode(action, &request.payload, ctx.decode_options())? {
+            match ctx.decode::<v2_1::CsRequest>(&request)? {
                 v2_1::CsRequest::BootNotification(_) => {
                     ctx.reply(&v2_1::BootNotificationResponse::new(
                         DateTime::now(),

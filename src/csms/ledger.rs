@@ -14,7 +14,7 @@
 //!
 //! # What the energy figures are, and are not
 //!
-//! [`Record::energy_wh`] is the difference of the station's own start and stop registers,
+//! [`Record::energy`] is the difference of the station's own start and stop registers,
 //! computed exactly: the readings are [`Decimal`]s at the resolution the meter wrote, and the
 //! subtraction is the one OCPP defines a session's energy as. Nothing here is rounded and
 //! nothing goes through an `f64`, so the figure can be carried into an invoice without
@@ -25,7 +25,7 @@
 //! * **The registers may not even be the quantity you want.** In the Open Charge Alliance's
 //!   own example message a 1.6 `StopTransaction` reports `meterStop: 108814` — the meter's
 //!   *lifetime* total in Wh — while the signed record beside it reports the transaction
-//!   running `0.000 → 0.636` kWh. `energy_wh` subtracts what the station reported, exactly;
+//!   running `0.000 → 0.636` kWh. `energy` subtracts what the station reported, exactly;
 //!   whether those two readings are the session's is the station's claim, not this ledger's.
 //! * **It is what the station said**, over a transport with no integrity guarantee beyond
 //!   TLS. Where calibration law requires the billable kWh to be traceable to the meter itself
@@ -35,17 +35,29 @@
 //! * A gap ([`Ingested::AppliedWithGap`]) or an event after the end
 //!   ([`Ingested::AfterEnd`]) says the record is incomplete, not that the energy is wrong —
 //!   but a transaction that ends without a `Started` event has no start register, and
-//!   `energy_wh` returns `None` rather than guessing at one.
+//!   `energy` returns `None` rather than guessing at one.
+//!
+//! That is why the figure is a [`RegisterDelta`] and not a bare [`Decimal`]: the number is
+//! reached only through [`unverified_wh`](RegisterDelta::unverified_wh), which says what it
+//! is at the call site, and it arrives together with the signed records a billing chain
+//! settles on. Code that passes it straight to an invoice line has to write the word.
+//!
+//! # Surviving a restart
+//!
+//! The ledger is a deterministic fold over the events it was given, so durability is a
+//! journal of those events: see [`DurableLedger`](super::ledger_store::DurableLedger).
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use serde::{Deserialize, Serialize};
+
 use super::events::SignedReading;
 use crate::types::{DateTime, Decimal, Identity};
 
 /// Which phase of a transaction an event belongs to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum EventKind {
     /// The transaction began.
     Started,
@@ -60,7 +72,7 @@ pub enum EventKind {
 /// 1.6 has no `seqNo`; use `0` for `StartTransaction`, increasing numbers for each
 /// `MeterValues`, and the highest for `StopTransaction`, or let
 /// [`Ledger::ingest_unsequenced`] assign them.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TransactionEvent {
     /// Which Charging Station sent it.
     pub identity: Identity,
@@ -194,7 +206,7 @@ pub enum Ingested {
 }
 
 /// One transaction, as the CSMS knows it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Record {
     /// Which Charging Station.
     pub identity: Identity,
@@ -285,27 +297,85 @@ impl Record {
             .filter(move |signed| signed.context.as_deref() == Some(context))
     }
 
-    /// The energy delivered, in Wh, when both a start and a stop reading are known.
+    /// The difference of the stop and start registers, when both are known.
     ///
     /// Exact: the difference of two decimal registers, at the finer of their two scales. No
     /// rounding, no `f64`, and no drift of the kind that makes `10.1 - 0.1` come out as
-    /// `10.000000000000002`.
+    /// `10.000000000000002`. Negative if the stop register is below the start one — the meter
+    /// was replaced or rolled over mid-transaction, a real condition the caller should see.
     ///
-    /// The result is negative if the stop register is below the start one, which means the
-    /// meter was replaced or rolled over mid-transaction — a real condition, and one the
-    /// caller should see rather than have silently clamped away. Read the [module
-    /// documentation](self) before treating this as a billing basis.
+    /// A [`RegisterDelta`], not a number: read the [module documentation](self) for why.
     #[must_use]
-    pub fn energy_wh(&self) -> Option<Decimal> {
-        self.meter_stop_wh?.checked_sub(self.meter_start_wh?)
+    pub fn energy(&self) -> Option<RegisterDelta<'_>> {
+        let wh = self.meter_stop_wh?.checked_sub(self.meter_start_wh?)?;
+        Some(RegisterDelta {
+            wh,
+            signed: &self.signed,
+        })
+    }
+}
+
+/// The energy a transaction's registers say was delivered — telemetry, not a billable
+/// quantity.
+///
+/// The figure is the difference of two readings the station reported over a link with no
+/// integrity guarantee beyond TLS; where calibration law applies, the billable value is the
+/// signed record, verified against the meter's own key. So the number is reachable only
+/// through [`unverified_wh`](Self::unverified_wh) — the call site says what it is — and it
+/// carries the [`signed`](Self::signed) records with it, so the two arrive together.
+///
+/// It converts into nothing, on purpose.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use]
+pub struct RegisterDelta<'a> {
+    wh: Decimal,
+    signed: &'a [SignedReading],
+}
+
+impl<'a> RegisterDelta<'a> {
+    /// The register difference in Wh, exactly as the station's readings give it.
+    ///
+    /// Fit for operating a CSMS, for a dashboard, for a plausibility check against the signed
+    /// records — not, by itself, for an invoice under calibration law.
+    #[must_use]
+    pub const fn unverified_wh(&self) -> Decimal {
+        self.wh
+    }
+
+    /// The signed meter values the transaction's events carried — what a billing chain
+    /// verifies and settles on.
+    #[must_use]
+    pub const fn signed(&self) -> &'a [SignedReading] {
+        self.signed
+    }
+
+    /// Whether any signed record came with the transaction.
+    #[must_use]
+    pub const fn has_signed_records(&self) -> bool {
+        !self.signed.is_empty()
+    }
+}
+
+impl core::fmt::Display for RegisterDelta<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{} Wh (unverified register delta)", self.wh)
     }
 }
 
 /// The ledger.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Ledger {
     records: BTreeMap<(Identity, String), Record>,
     next_seq: BTreeMap<(Identity, String), i32>,
+}
+
+/// The whole state of a [`Ledger`], in a form `serde` can write anywhere — JSON included,
+/// which has no tuple keys. What a [`LedgerStore`](super::ledger_store::LedgerStore)
+/// checkpoints.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LedgerSnapshot {
+    records: Vec<Record>,
+    next_seq: Vec<(Identity, String, i32)>,
 }
 
 impl Ledger {
@@ -313,6 +383,59 @@ impl Ledger {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The ledger's whole state.
+    #[must_use]
+    pub fn snapshot(&self) -> LedgerSnapshot {
+        LedgerSnapshot {
+            records: self.records.values().cloned().collect(),
+            next_seq: self
+                .next_seq
+                .iter()
+                .map(|((identity, transaction), seq)| (identity.clone(), transaction.clone(), *seq))
+                .collect(),
+        }
+    }
+
+    /// Rebuilds a ledger from a [`snapshot`](Self::snapshot).
+    #[must_use]
+    pub fn from_snapshot(snapshot: LedgerSnapshot) -> Self {
+        Self {
+            records: snapshot
+                .records
+                .into_iter()
+                .map(|record| {
+                    (
+                        (record.identity.clone(), record.transaction_id.clone()),
+                        record,
+                    )
+                })
+                .collect(),
+            next_seq: snapshot
+                .next_seq
+                .into_iter()
+                .map(|(identity, transaction, seq)| ((identity, transaction), seq))
+                .collect(),
+        }
+    }
+
+    /// Whether [`ingest`](Self::ingest) would answer [`Ingested::Duplicate`], without
+    /// recording anything.
+    #[must_use]
+    pub fn is_duplicate(&self, event: &TransactionEvent) -> bool {
+        self.records
+            .get(&(event.identity.clone(), event.transaction_id.clone()))
+            .is_some_and(|record| record.seen.contains(&event.seq_no))
+    }
+
+    /// Whether [`ingest_unsequenced`](Self::ingest_unsequenced) would answer
+    /// [`Ingested::Duplicate`], without recording anything.
+    #[must_use]
+    pub fn is_duplicate_unsequenced(&self, event: &TransactionEvent) -> bool {
+        self.records
+            .get(&(event.identity.clone(), event.transaction_id.clone()))
+            .is_some_and(|record| record.unsequenced.contains(&(event.kind, event.timestamp)))
     }
 
     /// Records one event, deduplicating on `(station, transaction, seqNo)`.
@@ -545,7 +668,10 @@ mod tests {
 
         let record = ledger.transaction(&station(), "tx-1").unwrap();
         assert!(!record.is_open());
-        assert_eq!(record.energy_wh(), Some(decimal!(6300)));
+        assert_eq!(
+            record.energy().map(|e| e.unverified_wh()),
+            Some(decimal!(6300))
+        );
         assert_eq!(record.id_token.as_deref(), Some("CARD-1"));
         assert_eq!(record.stopped_reason.as_deref(), Some("EVDisconnected"));
         assert!(record.had_offline_events);
@@ -581,8 +707,11 @@ mod tests {
         assert_eq!(ledger.ingest_unsequenced(&stop), Ingested::Applied);
 
         let record = ledger.transaction(&station(), "42").unwrap();
-        assert_eq!(record.energy_wh(), Some(decimal!(3300)));
-        assert!(record.missing().is_empty());
+        assert_eq!(
+            record.energy().map(|e| e.unverified_wh()),
+            Some(decimal!(3300))
+        );
+        assert!(record.missing().is_empty(), "{:?}", record.missing());
     }
 
     /// Out-of-order delivery is the case this ledger exists to survive, so the billed energy
@@ -616,7 +745,10 @@ mod tests {
         let record = ledger.transaction(&station(), "tx-1").unwrap();
         assert_eq!(record.meter_start_wh, Some(decimal!(1000)));
         assert_eq!(record.meter_stop_wh, Some(decimal!(3400)));
-        assert_eq!(record.energy_wh(), Some(decimal!(2400)));
+        assert_eq!(
+            record.energy().map(|e| e.unverified_wh()),
+            Some(decimal!(2400))
+        );
     }
 
     /// 1.6 messages carry no identity of their own, so a retried `MeterValues` is recognised
@@ -644,7 +776,7 @@ mod tests {
             3,
             "the retry did not become a fourth event"
         );
-        assert!(record.missing().is_empty());
+        assert!(record.missing().is_empty(), "{:?}", record.missing());
     }
 
     #[test]
