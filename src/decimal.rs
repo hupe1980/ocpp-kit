@@ -411,11 +411,11 @@ impl Decimal {
         let remainder_is_zero = if extra_drop > 0 {
             let factor = pow10_i128(extra_drop) as u128;
             match denominator.checked_mul(factor) {
-                Some(scaled) => numerator % scaled == 0,
+                Some(scaled) => numerator.is_multiple_of(scaled),
                 None => return None,
             }
         } else {
-            numerator % denominator == 0
+            numerator.is_multiple_of(denominator)
         };
         let rounded = round_off(quotient, 1, !remainder_is_zero);
         if rounded > i64::MAX as u128 {

@@ -144,7 +144,7 @@ impl BasicAuthPassword {
     /// The decoded octets are what goes on the wire, not the hex text.
     pub fn hex(key: &str) -> Result<Self, CredentialError> {
         let text = key.trim();
-        if text.len() % 2 != 0 || text.is_empty() {
+        if !text.len().is_multiple_of(2) || text.is_empty() {
             return Err(CredentialError::NotHex);
         }
         let mut bytes = Vec::with_capacity(text.len() / 2);
