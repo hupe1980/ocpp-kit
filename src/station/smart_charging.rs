@@ -1038,6 +1038,6 @@ mod tests {
         );
         assert_eq!(store.clear_transaction("tx-2"), 0);
         assert_eq!(store.clear_transaction("tx-1"), 1);
-        assert!(store.profiles().is_empty());
+        assert!(store.profiles().is_empty(), "{:?}", store.profiles());
     }
 }

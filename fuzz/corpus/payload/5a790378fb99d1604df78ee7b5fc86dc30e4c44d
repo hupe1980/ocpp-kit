@@ -1,0 +1,1 @@
+3{"generatedAt":"2026-11-07T12:00:00Z","seqNo":1,"eventData":[{"eventId":1,"timestamp":"2026-11-07T12:00:00Z","trigger":"Alerting","actualValue":"SYNTH-01","component":{"name":"SYNTH-01"},"eventNotificationType":"HardWiredNotification","variable":{"name":"SYNTH-01"}}]}

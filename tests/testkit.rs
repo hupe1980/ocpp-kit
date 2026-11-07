@@ -48,7 +48,7 @@ fn a_recorder_answers_the_questions_an_engine_test_actually_asks() {
     assert_eq!(outcomes.len(), 1);
     assert_eq!(outcomes[0].action, "BootNotification");
     assert!(outcomes[0].result.is_ok());
-    assert!(recorder.failures().is_empty());
+    assert!(recorder.failures().is_empty(), "{:?}", recorder.failures());
 
     // A peer that breaks a rule shows up on its own channel rather than as a failure.
     engine.handle(NOW, Input::Received(r#"[3,"never-sent",{}]"#));

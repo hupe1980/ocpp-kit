@@ -1,15 +1,17 @@
 +++
 title = "Security"
-description = "Security profiles 1-3, version-correct Basic authentication, TLS 1.2+ with rustls, 401-versus-404 handshake outcomes, and JWS signed messages per OCPP Part 4 chapter 7."
+description = "Security profiles 0 (1.6) to 3, version-correct Basic authentication, TLS 1.2+ with rustls, 401-versus-404 handshake outcomes, and JWS signed messages per OCPP Part 4 chapter 7."
 weight = 110
 +++
 
-## The three profiles
+## The profiles
 
-OCPP defines three (2.x Part 2 §A 1.3 Table 12; 1.6 Security Whitepaper ed. 2):
+OCPP defines three (2.x Part 2 §A 1.3 Table 12; 1.6 Security Whitepaper ed. 2), and plain
+OCPP-J 1.6 — without the Security Whitepaper — has a fourth with no authentication at all:
 
 | Profile | Transport | Station authenticates with | CSMS authenticates with |
 |---|---|---|---|
+| 0 | plain WebSocket | – (**1.6 only**) | – |
 | 1 | plain WebSocket | HTTP Basic | – |
 | 2 | TLS | HTTP Basic | server certificate |
 | 3 | TLS | client certificate | server certificate |
@@ -46,6 +48,14 @@ let profile3 = Station::builder()
 The builder refuses contradictions: a TLS profile with a `ws://` URL, profile 1 or 2 without a
 password, a TLS profile without a TLS configuration. Getting a security profile wrong should be
 a build error, not a production incident.
+
+Profile 0 exists because a great many 1.6 fleets and back ends run without the Security
+Whitepaper. Any peer that knows a station's identity can be that station, so it is never a
+default: a station reaches it only as `SecurityProfile::Unsecured`, and the builder refuses it
+when the station offers any 2.x version — "the Charging Station SHALL authenticate itself to
+the CSMS using HTTP Basic authentication" (A00.FR.202) is the 2.x floor. A CSMS reports a plain
+connection that sent no credentials as profile 0 in `Auth::profile`, so an authenticator can
+refuse it in one comparison.
 
 ## Passwords
 

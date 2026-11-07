@@ -115,8 +115,13 @@ Transfer), R (DER Control) and S (Battery Swapping).
 * The 1.6 schemas name almost nothing: enumerations and nested objects are inline. The
   generator carries a table giving each one the name the 1.6 specification itself uses, and
   **fails** if a schema contains an inline type the table does not cover.
-* `MeterValues` lists `Hertz` in its unit enumeration and `StopTransaction` does not — a defect
-  in the published schema, not a protocol difference. The generated `UnitOfMeasure` is the
-  union, and the merge is explicit in the generator rather than accidental.
-* `MeterValue.sampledValue` is `minItems: 1` under `MeterValues` and unbounded under
-  `StopTransaction`. The tighter bound wins, matching the specification's own cardinality table.
+* The schemas leave `meterValue` and `sampledValue` unbounded where the specification's tables
+  say `1..*` (§6.31, §7.33). The generator applies those bounds as cited schema patches, and
+  fails once a schema states them itself.
+* There is no `Hertz`. §7.31: "OCPP 1.6 does not have a UnitOfMeasure for frequency, the
+  UnitOfMeasure for any SampledValue with measurand: Frequency is Hertz" — implied, never sent —
+  and the OCA schemas list none; a station that sends `"unit":"Hertz"` anyway is an undefined enum
+  value — rejected strictly, kept as `UnknownValue` leniently.
+* The 1.6 core schemas are JSON Schema draft-04, where `20000.0` is **not** an integer. The
+  lenient preset repairs it; strict decoding refuses it, as the schema does. Every 2.x schema is
+  draft-06, where it is.

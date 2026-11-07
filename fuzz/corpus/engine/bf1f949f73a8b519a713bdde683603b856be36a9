@@ -1,0 +1,2 @@
+[3,"b-1",{"currentTime":"2026-11-07T12:00:00Z","interval":1,"status":"Accepted"}]
+[2,"b-1","BootNotification",{"chargingStation":{"model":"SYNTH-01","vendorName":"SYNTH-01"},"reason":"ApplicationReset"}]

@@ -56,10 +56,17 @@ jobs:
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
       # Fails if src/v1_6, src/v2_0_1 or src/v2_1 differ from what the schemas produce.
+      # Fails if a vendored schema is not the OCA file schemas/SHA256SUMS records, or a file
+      # was added or removed without updating it: "unmodified" is a checked claim.
+      - run: cargo xtask schemas-check
       - run: cargo xtask codegen --check
       # Fails if a schema update changed how much 2.0.1 and 2.1 differ, because the
       # documentation quotes that number and nothing else would notice it going stale.
       - run: cargo xtask schema-diff --check
+      # Fails if a source comment or test name cites a requirement id (`E01.FR.08`) that the
+      # extracted OCPP 2.0.1 / 2.1 Part 2 tables do not define: a typo is not coverage.
+      - run: cargo xtask coverage
+      - run: cargo xtask requirements --check
 
   test:
     name: test (${{ matrix.os }}, ${{ matrix.rust }})
@@ -82,6 +89,8 @@ jobs:
       # `testkit` is std-only and is what the engine tests are written against.
       - run: cargo test --no-default-features --features v1_6,v2_0_1,v2_1,std,testkit
       - run: cargo build --all-features --examples
+      # Asserts the SQLite store example's invariants: two processes, in-order, crash replay.
+      - run: cargo run --example sqlite_store
 
   msrv:
     name: msrv

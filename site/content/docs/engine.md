@@ -99,6 +99,30 @@ replaying.
 No defence against a corrupt filesystem. For a station whose state already lives in SQLite,
 implement the trait against that instead — it is four synchronous methods.
 
+**Choosing a store.**
+
+| Store | Use it when | Survives a power cut | Shared by processes |
+|---|---|---|---|
+| `MemStore` | You are a CSMS, or a test | No | — |
+| `FileStore` | One station process owns the queue | Yes | No — refused at `open` |
+| Your own `MessageStore` over a database | The station is several processes, or already has a database | As durable as the database | Yes, with real transactions |
+
+[`examples/sqlite_store.rs`](https://github.com/hupe1980/ocpp-kit/blob/main/examples/sqlite_store.rs)
+is the last row: SQLite in WAL mode, `BEGIN IMMEDIATE` writes, an `AUTOINCREMENT` sequence. It
+runs two processes against one file and asserts what the trait promises:
+
+```text
+$ cargo run --example sqlite_store
+queued 100 messages from two processes (99 hand-overs between them)
+delivered 30, then crashed with tx-station 15 in flight
+rebooted: tx-station 15 redelivered first; all 100 acknowledged once, in order; queue empty
+```
+
+With a shared store, keep exactly one consumer: the engine reads `pending()` when it is built,
+so other processes should only push — their messages are durable at once and go out on the
+next engine start. Delivery is at-least-once on the wire (a crash before the answer replays
+the message); the CSMS deduplicates `TransactionEvent` by `transactionId` and `seqNo`.
+
 **A `MessageId` is answered once.** Part 4 §4.2.3 names "an existing message with the same
 unique identifier is being handled already" as a `CALLERROR` condition, and it is right to: two
 answers under one id are indistinguishable to the sender. A reused id is refused with

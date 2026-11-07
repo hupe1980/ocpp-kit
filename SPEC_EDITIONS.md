@@ -5,12 +5,15 @@ specification documents change, this file changes with them.
 
 | Version | Schemas vendored in `schemas/` | Files | JSON Schema draft | Actions |
 |---|---|---|---|---|
-| OCPP 1.6 | 1.6 edition 2 core + Security Whitepaper edition 2 | 78 | draft-04 (core), draft-06 (security extensions) | **39** |
-| OCPP 2.0.1 | `OCPP 2.0.1 FINAL` | 128 | draft-06 | **64** |
-| OCPP 2.1 | `OCPP 2.1 Edition 1` (2025-01-23) | 181 | draft-06 | **91** |
+| OCPP 1.6 | "OCPP 1.6 (all files & errata)" core, errata sheet 2025-04 + Security Whitepaper edition 4 | 78 | draft-04 (core, 56), draft-06 (security extensions, 22) | **39** |
+| OCPP 2.0.1 | "OCPP 2.0.1 Edition 4 (all files)" — the files say `OCPP 2.0.1 FINAL` | 128 | draft-06 | **64** |
+| OCPP 2.1 | "OCPP 2.1 Edition 2 (all files)" — the files say `OCPP 2.1 Edition 1` (2025-01-23) | 181 | draft-06 | **91** |
 
-The edition string above is taken from each schema file's own `comment` field, so it cannot
-drift from what is committed.
+The OCA re-ships unchanged schema files with each edition, so the string in a file's own
+`comment` field names the edition that last *changed* it, and the first column names the
+current OCA package that contains it. These are the OCA files byte for byte —
+`schemas/SHA256SUMS` lists them and `cargo xtask schemas-check` (CI) fails on any difference;
+provenance and archive digests are in [`schemas/NOTICE`](schemas/NOTICE).
 
 ## Documents the behaviour was written against
 
@@ -65,21 +68,31 @@ R DER Control · S Battery Swapping** (new in 2.1).
 `RequestBatterySwap`, `SetDERControl`, `SetDefaultTariff`, `UpdateDynamicSchedule`,
 `UsePriorityCharging`, `VatNumberValidation`.
 
-## Editions these schemas predate
+## Current editions
 
-OCA published **OCPP 2.0.1 edition 4** and **OCPP 2.1 edition 2** on 2025-12-04, with errata in
-2026-04. What is vendored here is older — 2.0.1 FINAL and 2.1 edition 1 — as the table above
-records.
+OCA published **OCPP 2.0.1 edition 4** and **OCPP 2.1 edition 2** on 2025-12-04, and errata for
+both in 2026-09. At the schema level all of it is already here: the 2.1 edition 2 package ships
+the edition 1 schema files unchanged, and the 2.0.1 schema archive (2020-03-31) is unchanged by
+editions 2–4. What the editions and errata change is **prose** — use cases and requirements —
+which the behaviour was written against at the editions listed under *Documents* above.
 
-## Published-schema defects handled explicitly
+## Where the schema is less exact than the specification
 
-Two 1.6 schema defects are worked around in the generator rather than in the types, with the
-workaround declared rather than implicit:
+The schemas are vendored unmodified. Where the specification text is stricter than a schema,
+the generator applies a named, cited `SchemaPatch` in memory — and **fails** if the patched
+member already says what the patch would write, so a correction cannot outlive the defect:
 
-* `MeterValues` lists `Hertz` in its unit enumeration; `StopTransaction` does not. The
-  generated `UnitOfMeasure` is the union, declared in the generator's `V16_UNION_ENUMS` list.
-  A `StopTransaction` carrying `Hertz` would be rejected by the published `StopTransaction`
-  schema even though it is a legal `UnitOfMeasure`.
-* `MeterValue.sampledValue` is `minItems: 1` under `MeterValues` and unbounded under
-  `StopTransaction`. The tighter bound wins, matching the specification's own cardinality
-  table.
+* OCPP 1.6 `MeterValues.meterValue` — `minItems: 1` (§6.31 `MeterValues.req`: `1..*`).
+* OCPP 1.6 `MeterValue.sampledValue`, in `MeterValues` and in `StopTransaction.transactionData`
+  — `minItems: 1` (§7.33 `MeterValue`: `1..*`).
+
+## `integer` and `20000.0`
+
+JSON Schema changed what `integer` means between the two drafts OCPP uses. Draft-04 — the 1.6
+core schemas — says "a JSON number without a fraction or exponent part"; draft-06 and later —
+every 2.0.1 and 2.1 schema and the 1.6 security extensions — say "any number with a zero
+fractional part". The generator reads each file's `$schema`: an `integer` member from a
+draft-06 file accepts `20000.0` (and `2e4`) in every decode mode, one from a draft-04 file
+accepts it only with `DecodeOptions::whole_floats` set to `Coerce` (the lenient preset). A real
+fraction is a `TypeConstraintViolation` everywhere, and an integer is always sent back without
+a fraction.

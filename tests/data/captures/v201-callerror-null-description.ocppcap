@@ -1,0 +1,8 @@
+# A CALLERROR with `null` where Part 4 §4.2.3 asks for an ErrorDescription string, and one
+# with the empty string the specification allows. The frame parser reads a description that
+# is not a string as empty rather than refusing the error, so both pass in both modes
+# (frame parsing has no lenient mode).
+> [2,"1","GetVariables",{"getVariableData":[{"component":{"name":"SynthController"},"variable":{"name":"Uptime"}}]}]
+< [4,"1","InternalError",null,{}]
+> [2,"2","GetVariables",{"getVariableData":[{"component":{"name":"SynthController"},"variable":{"name":"Uptime"}}]}]
+< [4,"2","InternalError","",{}]

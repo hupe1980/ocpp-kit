@@ -1,0 +1,3 @@
+[2,"b-1","BootNotification",{"chargingStation":{"model":"SYNTH-01","vendorName":"SYNTH-01"},"reason":"ApplicationReset"}]
+[2,"h-1","Heartbeat",{}]
+[2,"h-2","Heartbeat",{}]

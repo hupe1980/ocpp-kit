@@ -78,12 +78,17 @@ carries a table mapping each `<file>:<json pointer>` to the name the 1.6 specifi
 uses — `IdTagInfo`, `ChargePointErrorCode`, `UnitOfMeasure`, `AuthorizationData` — and **fails**
 if it meets an inline type the table does not name. The table cannot drift silently.
 
-Two published-schema defects are handled explicitly rather than accidentally:
+The vendored schemas are the OCA files byte for byte — `schemas/SHA256SUMS` lists them and
+`cargo xtask schemas-check` fails CI on any difference. Where the specification text is
+stricter than a schema, the correction is a named, cited **schema patch** applied in memory by
+the generator, never an edit to the vendored file. Each patch also asserts its defect is still
+there: if a future OCA package fixes the schema, codegen fails and the patch is deleted.
+Today there are three, all OCPP 1.6 cardinalities the schemas leave open — `meterValue` and
+`sampledValue` are `1..*` in the specification's tables (§6.31, §7.33).
 
-* `MeterValues` lists `Hertz` in its unit enumeration and `StopTransaction` does not. The
-  generated `UnitOfMeasure` is the union, and the merge is declared in a `V16_UNION_ENUMS` list.
-* `MeterValue.sampledValue` is `minItems: 1` in one file and unbounded in the other. The
-  tighter bound wins, matching the specification's cardinality table.
+The generator also reads each file's `$schema`. An `integer` from a draft-06 file — every 2.x
+schema and the 1.6 security extensions — accepts `20000.0`, because draft-06 counts any number
+with a zero fractional part as an integer; one from a draft-04 file (the 1.6 core) does not.
 
 ## The appendix extractor
 
@@ -96,8 +101,8 @@ Unlike the schemas, the appendix is a PDF this repository does **not** redistrib
 generator runs on a developer's machine and its output is committed:
 
 ```console
-$ pdftotext -layout specs/ocpp-2.1/OCPP-2.1_part2_appendices_v20.pdf specs/ocpp-2.1/appendices.txt
-$ cargo xtask appendix
+$ pdftotext -layout OCPP-2.1_part2_appendices_v20.pdf appendices.txt
+$ OCPP_APPENDIX=appendices.txt cargo xtask appendix
 ```
 
 Only names, data types and criticality are reproduced — the identifiers two implementations

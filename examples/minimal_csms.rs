@@ -33,24 +33,15 @@ impl Handler for MyCsms {
             // look at the version-neutral view of what happened.
             let (observed, reply) = match ctx.version() {
                 Version::V1_6 => {
-                    let action = v1_6::Action::from_wire(&request.action)
-                        .ok_or_else(|| CallError::not_implemented(&request.action))?;
-                    let typed =
-                        v1_6::CsRequest::decode(action, &request.payload, ctx.decode_options())?;
+                    let typed = ctx.decode::<v1_6::CsRequest>(&request)?;
                     (observe_v16(&typed), answer_v16(&ctx, &typed))
                 }
                 Version::V2_0_1 => {
-                    let action = v2_0_1::Action::from_wire(&request.action)
-                        .ok_or_else(|| CallError::not_implemented(&request.action))?;
-                    let typed =
-                        v2_0_1::CsRequest::decode(action, &request.payload, ctx.decode_options())?;
+                    let typed = ctx.decode::<v2_0_1::CsRequest>(&request)?;
                     (observe_v201(&typed), answer_v201(&ctx, &typed))
                 }
                 _ => {
-                    let action = v2_1::Action::from_wire(&request.action)
-                        .ok_or_else(|| CallError::not_implemented(&request.action))?;
-                    let typed =
-                        v2_1::CsRequest::decode(action, &request.payload, ctx.decode_options())?;
+                    let typed = ctx.decode::<v2_1::CsRequest>(&request)?;
                     (observe_v21(&typed), answer_v21(&ctx, &typed))
                 }
             };
@@ -93,8 +84,12 @@ impl MyCsms {
         // automatically a billable one. The registers are whatever the meter chose to report,
         // and in the OCA's own example message `meterStop` is the meter's lifetime total
         // while the signed record beside it reports the session.
-        if let Some(energy) = record.energy_wh() {
-            println!("  ({energy} Wh between the reported registers)");
+        if let Some(energy) = record.energy() {
+            // `unverified_wh` is the only way to the number, and says what it is.
+            println!(
+                "  ({} Wh between the reported registers)",
+                energy.unverified_wh()
+            );
         }
         // Where calibration law applies, this is the value a customer may be billed for. It
         // is carried through untouched; verifying it needs the meter's public key from

@@ -317,7 +317,7 @@ pub struct EnergyReading {
 ///
 /// See [`metering`](crate::metering) for why this, and not the protocol's own numbers, is the
 /// value a customer may be billed for.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct SignedReading {
     /// The signed record, exactly as it arrived.
@@ -1247,7 +1247,10 @@ mod tests {
             .ingest_unsequenced(&to_ledger_event(&identity, &observed).expect("a stop event"));
 
         let record = ledger.transaction(&identity, "42").unwrap();
-        assert_eq!(record.energy_wh().unwrap().to_string(), "16500");
+        assert_eq!(
+            record.energy().unwrap().unverified_wh().to_string(),
+            "16500"
+        );
     }
 
     /// The ledger's claim about 1.6 is that `StartTransaction` / `MeterValues` /
@@ -1293,7 +1296,10 @@ mod tests {
         assert!(record.is_open());
         // The periodic reading is the running stop register until the real one arrives.
         assert_eq!(record.meter_stop_wh.unwrap().to_string(), "4500.5");
-        assert_eq!(record.energy_wh().unwrap().to_string(), "3500.5");
+        assert_eq!(
+            record.energy().unwrap().unverified_wh().to_string(),
+            "3500.5"
+        );
 
         // A 2.x `MeterValues` names no transaction and must stay out of the ledger — there is
         // no transaction it could belong to.
@@ -1334,7 +1340,7 @@ mod tests {
             panic!("{:?}", observed.event)
         };
         assert_eq!(energy.as_ref().unwrap().wh.to_string(), "4500.5");
-        assert!(signed.is_empty());
+        assert!(signed.is_empty(), "{signed:?}");
 
         assert_eq!(observed.warnings.len(), 1);
         assert_eq!(observed.warnings[0].kind, WarningKind::UnreadableSignedData);
@@ -1387,7 +1393,7 @@ mod tests {
     #[test]
     fn a_well_formed_message_warns_about_nothing() {
         let observed = observe_v21(&v2_1::CsRequest::Heartbeat(v2_1::HeartbeatRequest::new()));
-        assert!(observed.warnings.is_empty());
+        assert!(observed.warnings.is_empty(), "{:?}", observed.warnings);
     }
 
     /// `chargingState` is the one fact a meter reading cannot supply, and it decides money: a

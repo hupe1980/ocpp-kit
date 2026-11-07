@@ -6,7 +6,9 @@ use ocpp_kit::Version;
 use ocpp_kit::rpc::Frame;
 
 fuzz_target!(|data: &[u8]| {
-    let Ok(text) = core::str::from_utf8(data) else { return };
+    let Ok(text) = core::str::from_utf8(data) else {
+        return;
+    };
     for version in [Version::V1_6, Version::V2_0_1, Version::V2_1] {
         match Frame::parse(text, version) {
             Ok(frame) => {

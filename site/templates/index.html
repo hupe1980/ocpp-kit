@@ -48,7 +48,7 @@
     <article class="card">
       <h3>Transport</h3>
       <p>Charging station, CSMS and Part 4 chapter 6 local controller, on Tokio and
-      <code>rustls</code>, with security profiles 1–3 and network failover.</p>
+      <code>rustls</code>, with security profiles 0 (1.6 only) to 3 and network failover.</p>
       <a href="{{ get_url(path='@/docs/transport.md') }}">Layer 3 →</a>
     </article>
     <article class="card">
@@ -132,7 +132,7 @@
       <h3>Real hardware, not just the spec</h3>
       <p>The strict default is what the schemas say. A lenient policy additionally accepts
       offset-less timestamps, numeric strings and undefined enum values — via a repair loop
-      that only runs after a strict parse has failed.</p>
+      that only runs after a strict parse has failed, and reports every repair it made.</p>
       <a href="{{ get_url(path='@/docs/interop.md') }}">Talking to real hardware →</a>
     </article>
   </div>

@@ -110,6 +110,7 @@ pub struct APN {
     /// SIM card pin code.
     #[serde(rename = "simPin")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub sim_pin: Option<i32>,
     /// Preferred network, written as MCC and MNC concatenated. See note.
     #[serde(rename = "preferredNetwork")]
@@ -229,6 +230,7 @@ pub struct AbsolutePriceSchedule {
     pub time_anchor: crate::types::DateTime,
     /// Unique ID of price schedule
     #[serde(rename = "priceScheduleID")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub price_schedule_id: i32,
     /// Currency according to ISO 4217.
     pub currency: String,
@@ -697,6 +699,7 @@ impl Validate for AuthorizationData {
 pub struct BatteryData {
     /// Slot number where battery is inserted or removed.
     #[serde(rename = "evseId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub evse_id: i32,
     /// Serial number of battery.
     #[serde(rename = "serialNumber")]
@@ -1444,9 +1447,11 @@ impl Validate for ChargingPeriod {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChargingProfile {
     /// Id of ChargingProfile. Unique within charging station. Id can have a negative value. This is useful to distinguish charging profiles from an external actor (external constraints) from charging profiles received from CSMS.
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub id: i32,
     /// Value determining level in hierarchy stack of profiles. Higher values have precedence over lower values. Lowest level is 0.
     #[serde(rename = "stackLevel")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub stack_level: i32,
     /// The `chargingProfilePurpose` member.
     #[serde(rename = "chargingProfilePurpose")]
@@ -1478,6 +1483,7 @@ pub struct ChargingProfile {
     /// A value of 0 means that the charging profile is immediately invalid while offline. When the field is absent, then  no timeout applies and the charging profile remains valid when offline.
     #[serde(rename = "maxOfflineDuration")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub max_offline_duration: Option<i32>,
     /// *(2.1)* When set to true this charging profile will not be valid anymore after being offline for more than _maxOfflineDuration_. +
     ///     When absent defaults to false.
@@ -1489,6 +1495,7 @@ pub struct ChargingProfile {
     ///     Only relevant in a dynamic charging profile.
     #[serde(rename = "dynUpdateInterval")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub dyn_update_interval: Option<i32>,
     /// *(2.1)* Time at which limits or setpoints in this charging profile were last updated by a PullDynamicScheduleUpdateRequest or UpdateDynamicScheduleRequest or by an external actor. +
     ///     Only relevant in a dynamic charging profile.
@@ -1660,10 +1667,12 @@ pub struct ChargingProfileCriterion {
     /// Value determining level in hierarchy stack of profiles. Higher values have precedence over lower values. Lowest level is 0.
     #[serde(rename = "stackLevel")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub stack_level: Option<i32>,
     /// List of all the chargingProfileIds requested. Any ChargingProfile that matches one of these profiles will be reported. If omitted, the Charging Station SHALL not filter on chargingProfileId. This field SHALL NOT contain more ids than set in &lt;&lt;configkey-charging-profile-entries,ChargingProfileEntries.maxLimit&gt;&gt;
     #[serde(rename = "chargingProfileId")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option_list")]
     pub charging_profile_id: Option<Vec<i32>>,
     /// For which charging limit sources, charging profiles SHALL be reported. If omitted, the Charging Station SHALL not filter on chargingLimitSource. Values defined in Appendix as ChargingLimitSourceEnumStringType.
     #[serde(rename = "chargingLimitSource")]
@@ -1765,6 +1774,7 @@ impl Validate for ChargingProfileCriterion {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChargingSchedule {
     /// The `id` member.
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub id: i32,
     /// The `chargingRateUnit` member.
     #[serde(rename = "chargingRateUnit")]
@@ -1782,6 +1792,7 @@ pub struct ChargingSchedule {
     pub start_schedule: Option<crate::types::DateTime>,
     /// Duration of the charging schedule in seconds. If the duration is left empty, the last period will continue indefinitely or until end of the transaction in case startSchedule is absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub duration: Option<i32>,
     /// Minimum charging rate supported by the EV. The unit of measure is defined by the chargingRateUnit. This parameter is intended to be used by a local smart charging algorithm to optimize the power allocation for in the case a charging process is inefficient at lower charging rates.
     #[serde(rename = "minChargingRate")]
@@ -1794,6 +1805,7 @@ pub struct ChargingSchedule {
     /// *(2.1)* Id of this element for referencing in a signature.
     #[serde(rename = "signatureId")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub signature_id: Option<i32>,
     /// *(2.1)* Base64 encoded hash (SHA256 for ISO 15118-2, SHA512 for ISO 15118-20) of the EXI price schedule element. Used in signature.
     #[serde(rename = "digestValue")]
@@ -1807,6 +1819,7 @@ pub struct ChargingSchedule {
     /// *(2.1)* Defaults to 0. When _randomizedDelay_ not equals zero, then the start of each &lt;&lt;cmn_chargingscheduleperiodtype,ChargingSchedulePeriodType&gt;&gt; is delayed by a randomly chosen number of seconds between 0 and _randomizedDelay_.  Only allowed for TxProfile and TxDefaultProfile.
     #[serde(rename = "randomizedDelay")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub randomized_delay: Option<i32>,
     /// The `salesTariff` member.
     #[serde(rename = "salesTariff")]
@@ -2015,6 +2028,7 @@ impl Validate for ChargingSchedule {
 pub struct ChargingSchedulePeriod {
     /// Start of the period, in seconds from the start of schedule. The value of StartPeriod also defines the stop time of the previous period.
     #[serde(rename = "startPeriod")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub start_period: i32,
     /// Optional only when not required by the _operationMode_, as in CentralSetpoint, ExternalSetpoint, ExternalLimits, LocalFrequency,  LocalLoadBalancing. +
     /// Charging rate limit during the schedule period, in the applicable _chargingRateUnit_.
@@ -2035,10 +2049,12 @@ pub struct ChargingSchedulePeriod {
     /// For an AC EVSE a default value of _numberPhases_ = 3 will be assumed if the field is absent.
     #[serde(rename = "numberPhases")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub number_phases: Option<i32>,
     /// Values: 1..3, Used if numberPhases=1 and if the EVSE is capable of switching the phase connected to the EV, i.e. ACPhaseSwitchingSupported is defined and true. It’s not allowed unless both conditions above are true. If both conditions are true, and phaseToUse is omitted, the Charging Station / EVSE will make the selection on its own.
     #[serde(rename = "phaseToUse")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub phase_to_use: Option<i32>,
     /// *(2.1)* Limit in _chargingRateUnit_ that the EV is allowed to discharge with. Note, these are negative values in order to be consistent with _setpoint_, which can be positive and negative.  +
     /// For AC this field represents the sum of all phases, unless values are provided for L2 and L3, in which case this field represents phase L1.
@@ -2680,6 +2696,7 @@ pub struct ClearChargingProfile {
     /// Specifies the id of the EVSE for which to clear charging profiles. An evseId of zero (0) specifies the charging profile for the overall Charging Station. Absence of this parameter means the clearing applies to all charging profiles that match the other criteria in the request.
     #[serde(rename = "evseId")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub evse_id: Option<i32>,
     /// The `chargingProfilePurpose` member.
     #[serde(rename = "chargingProfilePurpose")]
@@ -2688,6 +2705,7 @@ pub struct ClearChargingProfile {
     /// Specifies the stackLevel for which charging profiles will be cleared, if they meet the other criteria in the request.
     #[serde(rename = "stackLevel")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub stack_level: Option<i32>,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -2762,6 +2780,7 @@ pub struct ClearMonitoringResult {
     /// The `status` member.
     pub status: ClearMonitoringStatus,
     /// Id of the monitor of which a clear was requested.
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub id: i32,
     /// The `statusInfo` member.
     #[serde(rename = "statusInfo")]
@@ -3038,8 +3057,10 @@ impl Validate for ComponentVariable {
 pub struct CompositeSchedule {
     /// The `evseId` member.
     #[serde(rename = "evseId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub evse_id: i32,
     /// The `duration` member.
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub duration: i32,
     /// The `scheduleStart` member.
     #[serde(rename = "scheduleStart")]
@@ -3118,11 +3139,13 @@ impl Validate for CompositeSchedule {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ConstantStreamData {
     /// Uniquely identifies the stream
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub id: i32,
     /// The `params` member.
     pub params: PeriodicEventStreamParams,
     /// Id of monitor used to report his event. It can be a preconfigured or hardwired monitor.
     #[serde(rename = "variableMonitoringId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub variable_monitoring_id: i32,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -3233,10 +3256,12 @@ pub struct Cost {
     #[serde(rename = "costKind")]
     pub cost_kind: CostKind,
     /// The estimated or actual cost per kWh
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub amount: i32,
     /// Values: -3..3, The amountMultiplier defines the exponent to base 10 (dec). The final value is determined by: amount * 10 ^ amountMultiplier
     #[serde(rename = "amountMultiplier")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub amount_multiplier: Option<i32>,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -3474,18 +3499,21 @@ pub struct DCChargingParameters {
     /// *ISO 15118-2*: DC_EVChargeParameterType: DC_EVStatus: EVRESSSOC
     #[serde(rename = "stateOfCharge")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub state_of_charge: Option<i32>,
     /// Percentage of SoC at which the EV considers the battery fully charged. (possible values: 0 - 100)
     /// Relates to: +
     /// *ISO 15118-2*: DC_EVChargeParameterType: FullSOC
     #[serde(rename = "fullSoC")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub full_so_c: Option<i32>,
     /// Percentage of SoC at which the EV considers a fast charging process to end. (possible values: 0 - 100)
     /// Relates to: +
     /// *ISO 15118-2*: DC_EVChargeParameterType: BulkSOC
     #[serde(rename = "bulkSoC")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub bulk_so_c: Option<i32>,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -4288,6 +4316,7 @@ pub struct DERCurve {
     #[serde(rename = "curveData")]
     pub curve_data: Vec<DERCurvePoints>,
     /// Priority of curve (0=highest)
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub priority: i32,
     /// The `yUnit` member.
     #[serde(rename = "yUnit")]
@@ -4622,6 +4651,7 @@ impl Validate for EVAbsolutePriceSchedule {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EVAbsolutePriceScheduleEntry {
     /// The amount of seconds of this entry.
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub duration: i32,
     /// The `evPriceRule` member.
     #[serde(rename = "evPriceRule")]
@@ -4800,6 +4830,7 @@ impl Validate for EVPowerSchedule {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EVPowerScheduleEntry {
     /// The duration of this entry.
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub duration: i32,
     /// Defines maximum amount of power for the duration of this EVPowerScheduleEntry to be discharged from the EV battery through EVSE power outlet. Negative values are used for discharging.
     pub power: crate::types::Decimal,
@@ -4893,10 +4924,12 @@ impl Validate for EVPriceRule {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EVSE {
     /// EVSE Identifier. This contains a number (&gt; 0) designating an EVSE of the Charging Station.
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub id: i32,
     /// An id to designate a specific connector (on an EVSE) by connector index number.
     #[serde(rename = "connectorId")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub connector_id: Option<i32>,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -4952,6 +4985,7 @@ impl Validate for EVSE {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EnterService {
     /// Priority of setting (0=highest)
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub priority: i32,
     /// Enter service voltage high
     #[serde(rename = "highVoltage")]
@@ -5103,6 +5137,7 @@ impl Validate for EnterServiceGet {
 pub struct EventData {
     /// Identifies the event. This field can be referred to as a cause by other events.
     #[serde(rename = "eventId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub event_id: i32,
     /// Timestamp of the moment the report was generated.
     pub timestamp: crate::types::DateTime,
@@ -5122,6 +5157,7 @@ pub struct EventData {
     pub variable: Variable,
     /// Refers to the Id of an event that is considered to be the cause for this event.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub cause: Option<i32>,
     /// Technical (error) code as reported by component.
     #[serde(rename = "techCode")]
@@ -5141,9 +5177,11 @@ pub struct EventData {
     /// Identifies the VariableMonitoring which triggered the event.
     #[serde(rename = "variableMonitoringId")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub variable_monitoring_id: Option<i32>,
     /// *(2.1)* Severity associated with the monitor in _variableMonitoringId_ or with the hardwired notification.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub severity: Option<i32>,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -5398,6 +5436,7 @@ impl Validate for Firmware {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FixedPF {
     /// Priority of setting (0=highest)
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub priority: i32,
     /// Power factor, cos(phi), as value between 0..1.
     pub displacement: crate::types::Decimal,
@@ -5535,6 +5574,7 @@ impl Validate for FixedPFGet {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FixedVar {
     /// Priority of setting (0=highest)
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub priority: i32,
     /// The value specifies a target var output interpreted as a signed percentage (-100 to 100).
     ///     A negative value refers to charging, whereas a positive one refers to discharging.
@@ -5673,6 +5713,7 @@ impl Validate for FixedVarGet {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FreqDroop {
     /// Priority of setting (0=highest)
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub priority: i32,
     /// Over-frequency start of droop
     #[serde(rename = "overFreq")]
@@ -6008,6 +6049,7 @@ impl Validate for GetVariableResult {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Gradient {
     /// Id of setting
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub priority: i32,
     /// Default ramp rate in seconds (0 if not applicable)
     pub gradient: crate::types::Decimal,
@@ -6271,6 +6313,7 @@ pub struct IdTokenInfo {
     /// Priority from a business point of view. Default priority is 0, The range is from -9 to 9. Higher values indicate a higher priority. The chargingPriority in &lt;&lt;transactioneventresponse,TransactionEventResponse&gt;&gt; overrules this one.
     #[serde(rename = "chargingPriority")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub charging_priority: Option<i32>,
     /// The `groupIdToken` member.
     #[serde(rename = "groupIdToken")]
@@ -6285,6 +6328,7 @@ pub struct IdTokenInfo {
     /// Only used when the IdToken is only valid for one or more specific EVSEs, not for the entire Charging Station.
     #[serde(rename = "evseId")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option_list")]
     pub evse_id: Option<Vec<i32>>,
     /// The `personalMessage` member.
     #[serde(rename = "personalMessage")]
@@ -6417,6 +6461,7 @@ impl Validate for IdTokenInfo {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LimitAtSoC {
     /// The SoC value beyond which the charging rate limit should be applied.
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub soc: i32,
     /// Charging rate limit beyond the SoC value.
     /// The unit is defined by _chargingSchedule.chargingRateUnit_.
@@ -6463,6 +6508,7 @@ impl Validate for LimitAtSoC {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LimitMaxDischarge {
     /// Priority of setting (0=highest)
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub priority: i32,
     /// Only for PowerMonitoring. +
     ///     The value specifies a percentage (0 to 100) of the rated maximum discharge power of EV.
@@ -6760,6 +6806,7 @@ impl Validate for MessageContent {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MessageInfo {
     /// Unique id within an exchange context. It is defined within the OCPP context as a positive Integer value (greater or equal to zero).
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub id: i32,
     /// The `priority` member.
     pub priority: MessagePriority,
@@ -7110,6 +7157,7 @@ pub struct NetworkConnectionProfile {
     /// The best setting depends on the underlying network and response times of the CSMS.
     /// If you are looking for a some guideline: use 30 seconds as a starting point.
     #[serde(rename = "messageTimeout")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub message_timeout: i32,
     /// URL of the CSMS(s) that this Charging Station communicates with, without the Charging Station identity part. +
     /// The SecurityCtrlr.Identity field is appended to _ocppCsmsUrl_ to provide the full websocket URL.
@@ -7117,6 +7165,7 @@ pub struct NetworkConnectionProfile {
     pub ocpp_csms_url: String,
     /// This field specifies the security profile used when connecting to the CSMS with this NetworkConnectionProfile.
     #[serde(rename = "securityProfile")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub security_profile: i32,
     /// The `apn` member.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -7352,9 +7401,11 @@ pub struct OverstayRule {
     pub overstay_fee: RationalNumber,
     /// Time in seconds after trigger of the parent Overstay Rules for this particular fee to apply.
     #[serde(rename = "startTime")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub start_time: i32,
     /// Time till overstay will be reapplied
     #[serde(rename = "overstayFeePeriod")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub overstay_fee_period: i32,
     /// Human readable string to identify the overstay rule.
     #[serde(rename = "overstayRuleDescription")]
@@ -7427,6 +7478,7 @@ pub struct OverstayRuleList {
     /// Time till overstay is applied in seconds.
     #[serde(rename = "overstayTimeThreshold")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub overstay_time_threshold: Option<i32>,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -7496,9 +7548,11 @@ impl Validate for OverstayRuleList {
 pub struct PeriodicEventStreamParams {
     /// Time in seconds after which stream data is sent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub interval: Option<i32>,
     /// Number of items to be sent together in stream.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub values: Option<i32>,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -7647,9 +7701,11 @@ pub struct PriceLevelSchedule {
     pub time_anchor: crate::types::DateTime,
     /// Unique ID of this price schedule.
     #[serde(rename = "priceScheduleId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub price_schedule_id: i32,
     /// Defines the overall number of distinct price level elements used across all PriceLevelSchedules.
     #[serde(rename = "numberOfPriceLevels")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub number_of_price_levels: i32,
     /// Description of the price schedule.
     #[serde(rename = "priceScheduleDescription")]
@@ -7742,9 +7798,11 @@ impl Validate for PriceLevelSchedule {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PriceLevelScheduleEntry {
     /// The amount of seconds that define the duration of this given PriceLevelScheduleEntry.
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub duration: i32,
     /// Defines the price level of this PriceLevelScheduleEntry (referring to NumberOfPriceLevels). Small values for the PriceLevel represent a cheaper PriceLevelScheduleEntry. Large values for the PriceLevel represent a more expensive PriceLevelScheduleEntry.
     #[serde(rename = "priceLevel")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub price_level: i32,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -7799,14 +7857,17 @@ pub struct PriceRule {
     /// When the time enters into a ParkingFeePeriod, the ParkingFee will apply to the session. .
     #[serde(rename = "parkingFeePeriod")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub parking_fee_period: Option<i32>,
     /// Number of grams of CO2 per kWh.
     #[serde(rename = "carbonDioxideEmission")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub carbon_dioxide_emission: Option<i32>,
     /// Percentage of the power that is created by renewable resources.
     #[serde(rename = "renewableGenerationPercentage")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub renewable_generation_percentage: Option<i32>,
     /// The `parkingFee` member.
     #[serde(rename = "parkingFee")]
@@ -7906,6 +7967,7 @@ impl Validate for PriceRule {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PriceRuleStack {
     /// Duration of the stack of price rules.  he amount of seconds that define the duration of the given PriceRule(s).
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub duration: i32,
     /// The `priceRule` member.
     #[serde(rename = "priceRule")]
@@ -7959,8 +8021,10 @@ impl Validate for PriceRuleStack {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RationalNumber {
     /// The exponent to base 10 (dec)
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub exponent: i32,
     /// Value which shall be multiplied.
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub value: i32,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -8071,9 +8135,11 @@ impl Validate for ReactivePowerParams {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RelativeTimeInterval {
     /// Start of the interval, in seconds from NOW.
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub start: i32,
     /// Duration of the interval, in seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub duration: Option<i32>,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -8207,6 +8273,7 @@ impl Validate for ReportData {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SalesTariff {
     /// SalesTariff identifier used to identify one sales tariff. An SAID remains a unique identifier for one schedule throughout a charging session.
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub id: i32,
     /// The `salesTariffEntry` member.
     #[serde(rename = "salesTariffEntry")]
@@ -8218,6 +8285,7 @@ pub struct SalesTariff {
     /// Defines the overall number of distinct price levels used across all provided SalesTariff elements.
     #[serde(rename = "numEPriceLevels")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub num_e_price_levels: Option<i32>,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -8306,6 +8374,7 @@ pub struct SalesTariffEntry {
     /// Defines the price level of this SalesTariffEntry (referring to NumEPriceLevels). Small values for the EPriceLevel represent a cheaper TariffEntry. Large values for the EPriceLevel represent a more expensive TariffEntry.
     #[serde(rename = "ePriceLevel")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub e_price_level: Option<i32>,
     /// The `consumptionCost` member.
     #[serde(rename = "consumptionCost")]
@@ -8553,6 +8622,7 @@ pub struct SetMonitoringData {
     /// Indicates a regular operational event. May be used for reporting, measuring throughput, etc. No action is required. +
     /// *9-Debug* +
     /// Indicates information useful to developers for debugging, not useful during operations.
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub severity: i32,
     /// The `component` member.
     pub component: Component,
@@ -8560,6 +8630,7 @@ pub struct SetMonitoringData {
     pub variable: Variable,
     /// An id SHALL only be given to replace an existing monitor. The Charging Station handles the generation of id's for new monitors.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub id: Option<i32>,
     /// The `periodicEventStream` member.
     #[serde(rename = "periodicEventStream")]
@@ -8695,9 +8766,11 @@ pub struct SetMonitoringResult {
     /// Indicates a regular operational event. May be used for reporting, measuring throughput, etc. No action is required. +
     /// *9-Debug* +
     /// Indicates information useful to developers for debugging, not useful during operations.
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub severity: i32,
     /// Id given to the VariableMonitor by the Charging Station. The Id is only returned when status is accepted. Installed VariableMonitors should have unique id's but the id's of removed Installed monitors should have unique id's but the id's of removed monitors MAY be reused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub id: Option<i32>,
     /// The `statusInfo` member.
     #[serde(rename = "statusInfo")]
@@ -9405,6 +9478,7 @@ pub struct TariffAssignment {
     /// The `evseIds` member.
     #[serde(rename = "evseIds")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option_list")]
     pub evse_ids: Option<Vec<i32>>,
     /// IdTokens related to tariff
     #[serde(rename = "idTokens")]
@@ -9584,36 +9658,42 @@ pub struct TariffConditions {
     ///       Before that moment, this price is not yet active.
     #[serde(rename = "minTime")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub min_time: Option<i32>,
     /// Maximum duration in seconds the transaction (charging &amp; idle) MUST last (exclusive).
     ///       When the duration of a transaction is shorter than the defined value, this price is or becomes active.
     ///       After that moment, this price is no longer active.
     #[serde(rename = "maxTime")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub max_time: Option<i32>,
     /// Minimum duration in seconds the charging MUST last (inclusive).
     ///       When the duration of a charging is longer than the defined value, this price is or becomes active.
     ///       Before that moment, this price is not yet active.
     #[serde(rename = "minChargingTime")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub min_charging_time: Option<i32>,
     /// Maximum duration in seconds the charging MUST last (exclusive).
     ///       When the duration of a charging is shorter than the defined value, this price is or becomes active.
     ///       After that moment, this price is no longer active.
     #[serde(rename = "maxChargingTime")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub max_charging_time: Option<i32>,
     /// Minimum duration in seconds the idle period (i.e. not charging) MUST last (inclusive).
     ///       When the duration of the idle time is longer than the defined value, this price is or becomes active.
     ///       Before that moment, this price is not yet active.
     #[serde(rename = "minIdleTime")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub min_idle_time: Option<i32>,
     /// Maximum duration in seconds the idle period (i.e. not charging) MUST last (exclusive).
     ///       When the duration of idle time is shorter than the defined value, this price is or becomes active.
     ///       After that moment, this price is no longer active.
     #[serde(rename = "maxIdleTime")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub max_idle_time: Option<i32>,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -10352,6 +10432,7 @@ pub struct TaxRate {
     /// _stack_ = 1: tax added on top of _stack_ 0; +
     /// _stack_ = 2: tax added on top of _stack_ 1, etc.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub stack: Option<i32>,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -10411,6 +10492,7 @@ impl Validate for TaxRate {
 pub struct TaxRule {
     /// Id for the tax rule.
     #[serde(rename = "taxRuleID")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub tax_rule_id: i32,
     /// Indicates whether this tax applies to Energy Fees.
     #[serde(rename = "appliesToEnergyFee")]
@@ -10732,13 +10814,16 @@ pub struct TotalUsage {
     pub energy: crate::types::Decimal,
     /// Total duration of the charging session (including the duration of charging and not charging), in seconds.
     #[serde(rename = "chargingTime")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub charging_time: i32,
     /// Total duration of the charging session where the EV was not charging (no energy was transferred between EVSE and EV), in seconds.
     #[serde(rename = "idleTime")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub idle_time: i32,
     /// Total time of reservation in seconds.
     #[serde(rename = "reservationTime")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub reservation_time: Option<i32>,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -10801,6 +10886,7 @@ pub struct Transaction {
     /// Contains the total time that energy flowed from EVSE to EV during the transaction (in seconds). Note that timeSpentCharging is smaller or equal to the duration of the transaction.
     #[serde(rename = "timeSpentCharging")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub time_spent_charging: Option<i32>,
     /// The `stoppedReason` member.
     #[serde(rename = "stoppedReason")]
@@ -10809,6 +10895,7 @@ pub struct Transaction {
     /// The ID given to remote start request (&lt;&lt;requeststarttransactionrequest, RequestStartTransactionRequest&gt;&gt;. This enables to CSMS to match the started transaction to the given start request.
     #[serde(rename = "remoteStartId")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub remote_start_id: Option<i32>,
     /// The `operationMode` member.
     #[serde(rename = "operationMode")]
@@ -10956,10 +11043,12 @@ pub struct TransactionLimit {
     /// Maximum duration of transaction in seconds from start to end.
     #[serde(rename = "maxTime")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub max_time: Option<i32>,
     /// Maximum State of Charge of EV in percentage.
     #[serde(rename = "maxSoC")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub max_so_c: Option<i32>,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -11040,6 +11129,7 @@ pub struct UnitOfMeasure {
     /// The _multiplier_ only multiplies the value of the measurand. It does not specify a conversion between units, for example, kW and W.
     /// Schema default: `0`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub multiplier: Option<i32>,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -11252,6 +11342,7 @@ pub struct V2XChargingParameters {
     /// *ISO 15118-20*: BPT_DC_CPDReqEnergyTransferModeType: TargetSOC
     #[serde(rename = "targetSoC")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub target_so_c: Option<i32>,
     /// The `customData` member.
     #[serde(rename = "customData")]
@@ -11519,6 +11610,7 @@ impl Validate for V2XFreqWattPoint {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct V2XSignalWattPoint {
     /// Signal value from an AFRRSignalRequest.
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub signal: i32,
     /// Power in W to charge (positive) or discharge (negative) at specified frequency.
     pub power: crate::types::Decimal,
@@ -11837,6 +11929,7 @@ pub struct VariableCharacteristics {
     /// *(2.1)* Maximum number of elements from _valuesList_ that are supported as _attributeValue_.
     #[serde(rename = "maxElements")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub max_elements: Option<i32>,
     /// Mandatory when _dataType_ = OptionList, MemberList or SequenceList. In that case _valuesList_ specifies the allowed values for the type.
     ///
@@ -11953,6 +12046,7 @@ impl Validate for VariableCharacteristics {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct VariableMonitoring {
     /// Identifies the monitor.
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub id: i32,
     /// Monitor only active when a transaction is ongoing on a component relevant to this transaction.
     pub transaction: bool,
@@ -11984,6 +12078,7 @@ pub struct VariableMonitoring {
     /// Indicates a regular operational event. May be used for reporting, measuring throughput, etc. No action is required. +
     /// *9-Debug* +
     /// Indicates information useful to developers for debugging, not useful during operations.
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub severity: i32,
     /// The `eventNotificationType` member.
     #[serde(rename = "eventNotificationType")]

@@ -9,9 +9,12 @@
 //! deliberately **not** copied — read them in the appendix.
 //!
 //! ```text
-//! pdftotext -layout specs/ocpp-2.1/OCPP-2.1_part2_appendices_v20.pdf specs/ocpp-2.1/appendices.txt
-//! cargo xtask appendix
+//! pdftotext -layout OCPP-2.1_part2_appendices_v20.pdf appendices.txt
+//! OCPP_APPENDIX=appendices.txt cargo xtask appendix
 //! ```
+//!
+//! Without `OCPP_APPENDIX` the text is read from `concepts/reference/ocpp-2.1/appendices.txt`,
+//! the maintainers' local (gitignored) copy of the OCA corpus.
 //!
 //! The result is committed, so the crate builds without the appendix.
 
@@ -635,7 +638,16 @@ fn option(value: Option<&str>) -> String {
     value.map_or_else(|| "None".to_string(), |value| format!("Some({value:?})"))
 }
 
-/// Where the extracted appendix text is expected to live.
+/// Where the extracted appendix text is expected to live: `$OCPP_APPENDIX` if set, else the
+/// local OCA corpus under `concepts/reference/`.
 pub fn source_path(root: &Path) -> std::path::PathBuf {
-    root.join("specs").join("ocpp-2.1").join("appendices.txt")
+    std::env::var_os("OCPP_APPENDIX").map_or_else(
+        || {
+            root.join("concepts")
+                .join("reference")
+                .join("ocpp-2.1")
+                .join("appendices.txt")
+        },
+        std::path::PathBuf::from,
+    )
 }

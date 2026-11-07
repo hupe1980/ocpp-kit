@@ -99,6 +99,29 @@ pub trait Unconfirmed: Request<Response = NoResponse> {}
 /// A response payload.
 pub trait Response: Serialize + DeserializeOwned + Validate + Sealed {}
 
+/// A union of the requests one side receives — `v2_1::CsRequest` on a CSMS,
+/// `v2_1::CsmsRequest` on a station — decodable from an action and a raw payload.
+///
+/// Implemented by the code generator. A handler normally uses it through
+/// [`Ctx::decode`](crate::transport::Ctx::decode), which also reports what leniency forgave.
+pub trait DecodeRequest: Sized + Sealed {
+    /// This version's action enum.
+    type Action: ActionName;
+
+    /// Decodes `payload` for `action`, returning the value and every
+    /// [`Repair`](crate::decode::Repair) the options applied.
+    ///
+    /// # Errors
+    ///
+    /// The classified [`DecodeError`](crate::decode::DecodeError) — including
+    /// `UnsupportedAction` when `action` is not one this side receives.
+    fn decode_reporting(
+        action: Self::Action,
+        payload: &serde_json::value::RawValue,
+        options: &crate::decode::DecodeOptions,
+    ) -> Result<crate::decode::Decoded<Self>, crate::decode::DecodeError>;
+}
+
 /// The response type of a `SEND`, which by definition never has one (Part 4 §4.2.4).
 ///
 /// It is uninhabited, so a `SEND` cannot be awaited by construction.

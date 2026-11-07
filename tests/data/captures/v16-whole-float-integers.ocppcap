@@ -1,0 +1,7 @@
+# `20000.0` where the 1.6 (draft-04) schema says `integer`. Draft-04 integers exclude a
+# number with a fractional part even when it is zero, so strict rejects;
+# lenient (`WholeFloats::Coerce`) repairs to 20000.
+> [2,"1","StartTransaction",{"connectorId":1,"idTag":"SYNTH-TAG-01","meterStart":20000.0,"timestamp":"2026-11-07T12:00:05Z"}]
+< [3,"1",{"transactionId":104,"idTagInfo":{"status":"Accepted"}}]
+> [2,"2","StopTransaction",{"transactionId":104,"meterStop":25000.0,"timestamp":"2026-11-07T12:30:00Z"}]
+< [3,"2",{}]

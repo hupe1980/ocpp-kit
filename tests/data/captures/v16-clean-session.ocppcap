@@ -1,0 +1,14 @@
+# A clean OCPP 1.6J session: the baseline every quirk capture differs from.
+# Synthetic identities only (CS-SYNTH-0001, idTag SYNTH-TAG-01).
+> [2,"1","BootNotification",{"chargePointVendor":"SynthVendor","chargePointModel":"SV-1","chargePointSerialNumber":"SYNTH-0001"}]
+< [3,"1",{"status":"Accepted","currentTime":"2026-11-07T12:00:00Z","interval":300}]
+> [2,"2","StatusNotification",{"connectorId":1,"errorCode":"NoError","status":"Available","timestamp":"2026-11-07T12:00:01Z"}]
+< [3,"2",{}]
+> [2,"3","Authorize",{"idTag":"SYNTH-TAG-01"}]
+< [3,"3",{"idTagInfo":{"status":"Accepted"}}]
+> [2,"4","StartTransaction",{"connectorId":1,"idTag":"SYNTH-TAG-01","meterStart":0,"timestamp":"2026-11-07T12:00:05Z"}]
+< [3,"4",{"transactionId":101,"idTagInfo":{"status":"Accepted"}}]
+> [2,"5","MeterValues",{"connectorId":1,"transactionId":101,"meterValue":[{"timestamp":"2026-11-07T12:05:00Z","sampledValue":[{"value":"1250","measurand":"Energy.Active.Import.Register","unit":"Wh"}]}]}]
+< [3,"5",{}]
+> [2,"6","StopTransaction",{"transactionId":101,"idTag":"SYNTH-TAG-01","meterStop":2500,"timestamp":"2026-11-07T12:10:00Z","reason":"Local"}]
+< [3,"6",{"idTagInfo":{"status":"Accepted"}}]

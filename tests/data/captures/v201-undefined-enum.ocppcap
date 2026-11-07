@@ -1,0 +1,9 @@
+# 1.6 vocabulary leaking into 2.0.1: a connector status of "Charging" (2.0.1 has only
+# Available, Occupied, Reserved, Unavailable, Faulted) and a boot reason the 2.0.1 enum lacks.
+# Strict rejects both; lenient (`UnknownEnumValues::Preserve`) keeps the values.
+> [2,"1","BootNotification",{"reason":"ColdBoot","chargingStation":{"model":"SV-2","vendorName":"SynthVendor"}}]
+< [3,"1",{"currentTime":"2026-11-07T12:00:00Z","interval":300,"status":"Accepted"}]
+> [2,"2","StatusNotification",{"timestamp":"2026-11-07T12:00:01Z","connectorStatus":"Charging","evseId":1,"connectorId":1}]
+< [3,"2",{}]
+> [2,"3","StatusNotification",{"timestamp":"2026-11-07T12:00:02Z","connectorStatus":"Occupied","evseId":1,"connectorId":1}]
+< [3,"3",{}]

@@ -241,16 +241,96 @@ const V16_NAMES: &[(&str, &str)] = &[
     ("UnlockConnectorResponse:/status", "UnlockStatus"),
 ];
 
-/// Enums whose value sets legitimately differ between schema files and are merged into the
-/// union. `UnitOfMeasure` is the only one: the OCPP 1.6 `StopTransaction` schema omits
-/// `Hertz`, which `MeterValues` lists — a schema defect, not a protocol difference.
-const V16_UNION_ENUMS: &[&str] = &["UnitOfMeasure"];
+/// A correction the specification text makes to a vendored OCA schema file.
+///
+/// `schemas/` holds the OCA files byte-for-byte, so where a schema is less exact than the
+/// specification's own tables the correction lives here — named, cited, applied in memory —
+/// and never in the vendored file. Each patch also **asserts its defect is still present**:
+/// if a future OCA edition fixes the schema, the patch no longer applies and codegen fails,
+/// so a workaround cannot outlive its reason.
+struct SchemaPatch {
+    version: VersionId,
+    /// Schema file stem.
+    file: &'static str,
+    /// RFC 6901 pointer to the schema node the member belongs to.
+    pointer: &'static str,
+    member: &'static str,
+    value: u64,
+    /// The specification sentence or table the patch implements.
+    cite: &'static str,
+}
+
+const SCHEMA_PATCHES: &[SchemaPatch] = &[
+    SchemaPatch {
+        version: VersionId::V1_6,
+        file: "MeterValues",
+        pointer: "/properties/meterValue",
+        member: "minItems",
+        value: 1,
+        cite: "OCPP 1.6 edition 2 §6.31 MeterValues.req: meterValue 1..*",
+    },
+    SchemaPatch {
+        version: VersionId::V1_6,
+        file: "MeterValues",
+        pointer: "/properties/meterValue/items/properties/sampledValue",
+        member: "minItems",
+        value: 1,
+        cite: "OCPP 1.6 edition 2 §7.33 MeterValue: sampledValue 1..*",
+    },
+    SchemaPatch {
+        version: VersionId::V1_6,
+        file: "StopTransaction",
+        pointer: "/properties/transactionData/items/properties/sampledValue",
+        member: "minItems",
+        value: 1,
+        cite: "OCPP 1.6 edition 2 §7.33 MeterValue: sampledValue 1..*",
+    },
+];
+
+/// Reads one vendored schema file and applies its [`SchemaPatch`]es.
+fn read_schema(version: VersionId, path: &Path) -> Result<Value> {
+    let mut doc: Value = serde_json::from_str(&std::fs::read_to_string(path)?)
+        .with_context(|| format!("parsing {}", path.display()))?;
+    let file = stem(path);
+    for patch in SCHEMA_PATCHES
+        .iter()
+        .filter(|p| p.version == version && p.file == file)
+    {
+        let node = doc
+            .pointer_mut(patch.pointer)
+            .and_then(Value::as_object_mut)
+            .with_context(|| format!("{file}.json: patch target {} is gone", patch.pointer))?;
+        if node.get(patch.member).and_then(Value::as_u64) == Some(patch.value) {
+            bail!(
+                "{file}.json{}: the schema now says {} = {} itself — the erratum is fixed \
+                 upstream; delete the SchemaPatch ({})",
+                patch.pointer,
+                patch.member,
+                patch.value,
+                patch.cite
+            );
+        }
+        node.insert(patch.member.to_string(), Value::from(patch.value));
+    }
+    Ok(doc)
+}
 
 pub struct Loader {
     version: VersionId,
     model: VersionModel,
     /// 2.x: schema definition name -> Rust type name.
     names: BTreeMap<String, String>,
+    /// Whether the schema file being read counts `20000.0` as an `integer` (draft-06+).
+    whole_floats: bool,
+}
+
+/// draft-06 changed `integer` from "a JSON number without a fraction or exponent part"
+/// (draft-04, core §3.5) to "any number with a zero fractional part" (draft-06, core §4.2).
+/// Each OCA file names its draft in `$schema`, and OCPP 1.6 mixes both.
+fn accepts_whole_floats(doc: &Value) -> bool {
+    !doc.get("$schema")
+        .and_then(Value::as_str)
+        .is_some_and(|s| s.contains("draft-04"))
 }
 
 pub fn load(version: VersionId, schema_dir: &Path) -> Result<VersionModel> {
@@ -258,6 +338,7 @@ pub fn load(version: VersionId, schema_dir: &Path) -> Result<VersionModel> {
         version,
         model: VersionModel::default(),
         names: BTreeMap::new(),
+        whole_floats: true,
     };
     let dir = schema_dir.join(version.dir());
 
@@ -276,7 +357,7 @@ pub fn load(version: VersionId, schema_dir: &Path) -> Result<VersionModel> {
     if version != VersionId::V1_6 {
         let mut is_enum: BTreeMap<String, bool> = BTreeMap::new();
         for path in &files {
-            let doc: Value = serde_json::from_str(&std::fs::read_to_string(path)?)?;
+            let doc = read_schema(version, path)?;
             if let Some(defs) = doc.get("definitions").and_then(Value::as_object) {
                 for (name, def) in defs {
                     let e = def.get("enum").is_some();
@@ -323,8 +404,8 @@ pub fn load(version: VersionId, schema_dir: &Path) -> Result<VersionModel> {
 
     // Pass 1: register every named definition so `$ref`s resolve regardless of file order.
     for path in &files {
-        let doc: Value = serde_json::from_str(&std::fs::read_to_string(path)?)
-            .with_context(|| format!("parsing {}", path.display()))?;
+        let doc = read_schema(version, path)?;
+        loader.whole_floats = accepts_whole_floats(&doc);
         loader
             .register_definitions(&doc)
             .with_context(|| path.display().to_string())?;
@@ -338,7 +419,8 @@ pub fn load(version: VersionId, schema_dir: &Path) -> Result<VersionModel> {
         let Some(req_path) = req_path else {
             continue;
         };
-        let req_doc: Value = serde_json::from_str(&std::fs::read_to_string(&req_path)?)?;
+        let req_doc = read_schema(version, &req_path)?;
+        loader.whole_floats = accepts_whole_floats(&req_doc);
         let request = loader
             .object_struct(
                 &format!("{}Request", info.action),
@@ -351,7 +433,8 @@ pub fn load(version: VersionId, schema_dir: &Path) -> Result<VersionModel> {
 
         let response = match resp_path {
             Some(p) => {
-                let doc: Value = serde_json::from_str(&std::fs::read_to_string(&p)?)?;
+                let doc = read_schema(version, &p)?;
+                loader.whole_floats = accepts_whole_floats(&doc);
                 Some(
                     loader
                         .object_struct(
@@ -553,18 +636,10 @@ impl Loader {
                 let same: Vec<_> = existing.variants.iter().map(|v| v.wire.clone()).collect();
                 let incoming: Vec<_> = def.variants.iter().map(|v| v.wire.clone()).collect();
                 if same != incoming {
-                    if !V16_UNION_ENUMS.contains(&def.name.as_str()) {
-                        bail!(
-                            "enum {} declared twice with different values:\n  {same:?}\n  {incoming:?}",
-                            def.name
-                        );
-                    }
-                    for v in def.variants {
-                        if !existing.variants.iter().any(|e| e.wire == v.wire) {
-                            existing.variants.push(v);
-                        }
-                    }
-                    existing.variants.sort_by(|a, b| a.wire.cmp(&b.wire));
+                    bail!(
+                        "enum {} declared twice with different values:\n  {same:?}\n  {incoming:?}",
+                        def.name
+                    );
                 }
                 if existing.doc.is_none() {
                     existing.doc = def.doc;
@@ -580,11 +655,10 @@ impl Loader {
                 self.model.structs.insert(def.name.clone(), def);
             }
             Some(existing) => {
-                // Shapes must agree; constraints may not. The OCPP 1.6 schemas repeat the
-                // same type with slightly different bounds (`MeterValue.sampledValue` is
-                // `minItems: 1` under `MeterValues` but unbounded under `StopTransaction`).
-                // The tighter bound wins, so validation matches the specification's own
-                // cardinality tables.
+                // Shapes must agree; constraints may not. The OCPP 1.6 schemas repeat
+                // inline types per file, and a type shared by two files may carry
+                // different bounds in each. The tighter bound wins, so validation matches
+                // the specification's own cardinality tables.
                 let shape = |d: &StructDef| -> Vec<(String, Ty, bool)> {
                     d.fields
                         .iter()
@@ -655,7 +729,9 @@ impl Loader {
     }
 
     fn typed(&mut self, node: &Value, file: &str, pointer: &str) -> Result<Typed> {
-        let c = constraints(node);
+        let mut c = constraints(node);
+        c.whole_floats =
+            node.get("type").and_then(Value::as_str) == Some("integer") && self.whole_floats;
 
         if let Some(reference) = node.get("$ref").and_then(Value::as_str) {
             let def_name = reference
@@ -773,6 +849,8 @@ fn tighten(into: &mut Typed, other: &Typed) {
     into.c.min_items = max_opt(into.c.min_items, other.c.min_items);
     into.c.max_length = min_opt(into.c.max_length, other.c.max_length);
     into.c.max_items = min_opt(into.c.max_items, other.c.max_items);
+    // A type shared by a draft-04 and a draft-06 file takes the stricter reading.
+    into.c.whole_floats &= other.c.whole_floats;
     into.c.minimum = match (into.c.minimum, other.c.minimum) {
         (Some(a), Some(b)) => Some(a.max(b)),
         (x, y) => x.or(y),
@@ -809,5 +887,54 @@ fn constraints(node: &Value) -> Constraints {
         maximum: node.get("maximum").and_then(Value::as_f64),
         min_items: u32_of("minItems"),
         max_items: u32_of("maxItems"),
+        whole_floats: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(test: &str, name: &str, body: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("ocpp-kit-{test}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{name}.json"));
+        std::fs::write(&path, body).unwrap();
+        path
+    }
+
+    #[test]
+    fn a_patch_applies_while_its_defect_is_present() {
+        let path = scratch(
+            "patch-applies",
+            "MeterValues",
+            r#"{"$schema":"http://json-schema.org/draft-04/schema#","properties":{"meterValue":{"type":"array","items":{"properties":{"sampledValue":{"type":"array"}}}}}}"#,
+        );
+        let doc = read_schema(VersionId::V1_6, &path).unwrap();
+        assert_eq!(
+            doc.pointer("/properties/meterValue/minItems"),
+            Some(&Value::from(1))
+        );
+    }
+
+    #[test]
+    fn a_patch_fails_once_upstream_fixes_the_schema() {
+        let path = scratch(
+            "patch-fixed",
+            "MeterValues",
+            r#"{"properties":{"meterValue":{"type":"array","minItems":1,"items":{"properties":{"sampledValue":{"type":"array"}}}}}}"#,
+        );
+        let error = read_schema(VersionId::V1_6, &path).unwrap_err().to_string();
+        assert!(error.contains("fixed upstream"), "{error}");
+    }
+
+    #[test]
+    fn draft_04_integers_are_exact_and_draft_06_integers_accept_whole_floats() {
+        assert!(!accepts_whole_floats(
+            &serde_json::json!({"$schema": "http://json-schema.org/draft-04/schema#"})
+        ));
+        assert!(accepts_whole_floats(
+            &serde_json::json!({"$schema": "http://json-schema.org/draft-06/schema#"})
+        ));
     }
 }

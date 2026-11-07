@@ -1,0 +1,7 @@
+# A 1.6 meter value with "unit":"Hertz". `Hertz` belongs to the 2.0.1 measurand vocabulary,
+# not to the 1.6 UnitOfMeasure enumeration, but stations that report grid frequency send it.
+# Strict rejects the undefined enum value; lenient (`UnknownEnumValues::Preserve`) keeps it.
+> [2,"1","MeterValues",{"connectorId":1,"meterValue":[{"timestamp":"2026-11-07T12:05:00Z","sampledValue":[{"value":"50.01","measurand":"Frequency","unit":"Hertz"}]}]}]
+< [3,"1",{}]
+> [2,"2","MeterValues",{"connectorId":1,"meterValue":[{"timestamp":"2026-11-07T12:05:00Z","sampledValue":[{"value":"230.1","measurand":"Voltage","unit":"V","phase":"L1-N"}]}]}]
+< [3,"2",{}]

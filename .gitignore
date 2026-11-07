@@ -23,9 +23,28 @@ target
 # Zola output
 site/public/
 
-# Downloaded specifications (not redistributable)
-specs/
 .DS_Store
 
-# Internal architecture concepts (not published)
-concepts/
+# ── Internal notes, feature specifications and third-party sources ─────────────
+
+# Architecture notes (not published): the D/R/ERR-numbered decisions, risks and
+# errata, and ROADMAP.md, the spec of specs — every open item names its feature
+# specification.
+#
+# The OCA specification corpus — the OCPP 1.6, 2.0.1 and 2.1 PDFs, their text
+# renderings and errata — lives at `concepts/reference/` and is covered by this
+# line: OCA-licensed and not redistributable, indexed with retrieval URLs in
+# `concepts/REFERENCES.md`. Only the JSON schemas are vendored, into schemas/.
+/concepts/
+
+# This project's own feature specifications, and the Spec Kit machinery that
+# produces them: one `specs/NNN-slug/` per ROADMAP item (spec, plan, research,
+# tasks), `.specify/memory/constitution.md`, and the `/speckit-*` skills. Same
+# rule as `concepts/` — internal, and the published tree may not cite a path its
+# reader does not have; `scripts/concepts-check.sh` fails on one that does.
+#
+# Until 2026-11-07 `specs/` held the OCA corpus now under `concepts/reference/`;
+# a stale copy is ignored by the same line. Matches billing, sepa and agentplane.
+/specs/
+/.specify/
+/.claude/

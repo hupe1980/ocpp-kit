@@ -37,6 +37,10 @@ pub struct Constraints {
     pub maximum: Option<f64>,
     pub min_items: Option<u32>,
     pub max_items: Option<u32>,
+    /// `integer` only: the schema's draft counts a number with a zero fractional part
+    /// (`20000.0`) as an integer. True from draft-06 on; draft-04 says an integer is "a JSON
+    /// number without a fraction or exponent part".
+    pub whole_floats: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]

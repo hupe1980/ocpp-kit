@@ -28,10 +28,8 @@ impl Handler for MyStation {
         request: IncomingRequest,
     ) -> BoxFuture<'_, Result<Box<RawValue>, CallError>> {
         Box::pin(async move {
-            let action = v2_1::Action::from_wire(&request.action)
-                .ok_or_else(|| CallError::not_implemented(&request.action))?;
-            println!("<- {action}");
-            match v2_1::CsmsRequest::decode(action, &request.payload, ctx.decode_options())? {
+            println!("<- {}", request.action);
+            match ctx.decode::<v2_1::CsmsRequest>(&request)? {
                 v2_1::CsmsRequest::Reset(_) => {
                     ctx.reply(&v2_1::ResetResponse::new(v2_1::ResetStatus::Accepted))
                 }

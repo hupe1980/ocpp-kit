@@ -931,6 +931,7 @@ pub struct ExtendedTriggerMessageRequest {
     /// The `connectorId` member.
     #[serde(rename = "connectorId")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub connector_id: Option<i32>,
 }
 
@@ -1543,13 +1544,16 @@ pub struct GetLogRequest {
     pub log_type: LogType,
     /// The `requestId` member.
     #[serde(rename = "requestId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub request_id: i32,
     /// The `retries` member.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub retries: Option<i32>,
     /// The `retryInterval` member.
     #[serde(rename = "retryInterval")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub retry_interval: Option<i32>,
 }
 
@@ -1776,6 +1780,7 @@ pub struct LogStatusNotificationRequest {
     /// The `requestId` member.
     #[serde(rename = "requestId")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub request_id: Option<i32>,
 }
 
@@ -2516,6 +2521,7 @@ pub struct SignedFirmwareStatusNotificationRequest {
     /// The `requestId` member.
     #[serde(rename = "requestId")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub request_id: Option<i32>,
 }
 
@@ -2580,15 +2586,18 @@ impl Response for SignedFirmwareStatusNotificationResponse {}
 pub struct SignedUpdateFirmwareRequest {
     /// The `requestId` member.
     #[serde(rename = "requestId")]
+    #[serde(deserialize_with = "crate::types::integer::one")]
     pub request_id: i32,
     /// The `firmware` member.
     pub firmware: Firmware,
     /// The `retries` member.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub retries: Option<i32>,
     /// The `retryInterval` member.
     #[serde(rename = "retryInterval")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::types::integer::option")]
     pub retry_interval: Option<i32>,
 }
 

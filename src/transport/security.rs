@@ -1,9 +1,12 @@
-//! Security profiles 1–3 and the credential rules that go with them.
+//! Security profiles 0–3 and the credential rules that go with them.
 //!
-//! OCPP defines three profiles (2.x Part 2 §A 1.3 Table 12; 1.6 Security Whitepaper ed. 2):
+//! OCPP defines three profiles (2.x Part 2 §A 1.3 Table 12; 1.6 Security Whitepaper ed. 2),
+//! and plain OCPP-J 1.6 — without the Security Whitepaper — has a fourth, with no
+//! authentication at all:
 //!
 //! | Profile | Transport | Charging Station authenticates with | CSMS authenticates with |
 //! |---|---|---|---|
+//! | 0 | plain WebSocket | – (OCPP 1.6 only) | – |
 //! | 1 | plain WebSocket | HTTP Basic | – |
 //! | 2 | TLS | HTTP Basic | server certificate |
 //! | 3 | TLS | client certificate | server certificate |
@@ -22,6 +25,16 @@ use crate::version::Version;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum SecurityProfile {
+    /// 0 — unsecured transport, **no authentication**: plain OCPP-J 1.6 without the Security
+    /// Whitepaper. Any peer that knows a station's identity can be that station.
+    ///
+    /// OCPP 2.x has no such profile — "the Charging Station SHALL authenticate itself to the
+    /// CSMS using HTTP Basic authentication" (A00.FR.202) is the floor — so a [`Station`]
+    /// offering any 2.x version refuses to build with it. It is never a default: a station
+    /// reaches it only by naming it.
+    ///
+    /// [`Station`]: super::Station
+    Unsecured,
     /// 1 — unsecured transport with HTTP Basic authentication.
     BasicAuth,
     /// 2 — TLS with HTTP Basic authentication.
@@ -35,6 +48,7 @@ impl SecurityProfile {
     #[must_use]
     pub const fn number(self) -> u8 {
         match self {
+            SecurityProfile::Unsecured => 0,
             SecurityProfile::BasicAuth => 1,
             SecurityProfile::TlsBasicAuth => 2,
             SecurityProfile::TlsClientCertificate => 3,
@@ -45,6 +59,7 @@ impl SecurityProfile {
     #[must_use]
     pub const fn from_number(number: u8) -> Option<Self> {
         Some(match number {
+            0 => SecurityProfile::Unsecured,
             1 => SecurityProfile::BasicAuth,
             2 => SecurityProfile::TlsBasicAuth,
             3 => SecurityProfile::TlsClientCertificate,
@@ -55,7 +70,10 @@ impl SecurityProfile {
     /// Whether the transport is TLS.
     #[must_use]
     pub const fn is_transport_encrypted(self) -> bool {
-        !matches!(self, SecurityProfile::BasicAuth)
+        !matches!(
+            self,
+            SecurityProfile::Unsecured | SecurityProfile::BasicAuth
+        )
     }
 
     /// Whether HTTP Basic credentials are sent.

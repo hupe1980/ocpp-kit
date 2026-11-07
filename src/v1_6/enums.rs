@@ -659,42 +659,40 @@ ocpp_enum! {
 ocpp_enum! {
     /// The OCPP 1.6 `UnitOfMeasure` enumeration.
     UnitOfMeasure {
+        /// `Wh`.
+        Wh = "Wh",
+        /// `kWh`.
+        KWh = "kWh",
+        /// `varh`.
+        Varh = "varh",
+        /// `kvarh`.
+        Kvarh = "kvarh",
+        /// `W`.
+        W = "W",
+        /// `kW`.
+        KW = "kW",
+        /// `VA`.
+        VA = "VA",
+        /// `kVA`.
+        KVA = "kVA",
+        /// `var`.
+        Var = "var",
+        /// `kvar`.
+        Kvar = "kvar",
         /// `A`.
         A = "A",
+        /// `V`.
+        V = "V",
+        /// `K`.
+        K = "K",
         /// `Celcius`.
         Celcius = "Celcius",
         /// `Celsius`.
         Celsius = "Celsius",
         /// `Fahrenheit`.
         Fahrenheit = "Fahrenheit",
-        /// `Hertz`.
-        Hertz = "Hertz",
-        /// `K`.
-        K = "K",
         /// `Percent`.
         Percent = "Percent",
-        /// `V`.
-        V = "V",
-        /// `VA`.
-        VA = "VA",
-        /// `W`.
-        W = "W",
-        /// `Wh`.
-        Wh = "Wh",
-        /// `kVA`.
-        KVA = "kVA",
-        /// `kW`.
-        KW = "kW",
-        /// `kWh`.
-        KWh = "kWh",
-        /// `kvar`.
-        Kvar = "kvar",
-        /// `kvarh`.
-        Kvarh = "kvarh",
-        /// `var`.
-        Var = "var",
-        /// `varh`.
-        Varh = "varh",
     }
 }
 
