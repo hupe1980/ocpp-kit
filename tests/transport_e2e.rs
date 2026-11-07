@@ -20,6 +20,7 @@ use tokio::net::TcpListener;
 /// A CSMS that accepts boot notifications and counts what it saw.
 struct CsmsSide {
     boots: AtomicUsize,
+    transaction_events: AtomicUsize,
     boot_status: v2_1::RegistrationStatus,
 }
 
@@ -27,6 +28,7 @@ impl CsmsSide {
     fn new(boot_status: v2_1::RegistrationStatus) -> Self {
         Self {
             boots: AtomicUsize::new(0),
+            transaction_events: AtomicUsize::new(0),
             boot_status,
         }
     }
@@ -53,6 +55,10 @@ impl Handler for CsmsSide {
                 )),
                 v2_1::CsRequest::StatusNotification(_) => {
                     ctx.reply(&v2_1::StatusNotificationResponse::new())
+                }
+                v2_1::CsRequest::TransactionEvent(_) => {
+                    self.transaction_events.fetch_add(1, Ordering::SeqCst);
+                    ctx.reply(&v2_1::TransactionEventResponse::new())
                 }
                 other => Err(CallError::not_supported(other.action().as_str())),
             }
@@ -1072,4 +1078,94 @@ async fn sessions_report_compression_and_the_peers_close_frame() {
     .expect("a Disconnected event");
     let frame = peer_close.expect("the station sent a close frame");
     assert_eq!(frame.code, ocpp_kit::transport::CloseCode::NORMAL);
+}
+
+/// A store two owners share: the station's engine, and "another process" that pushes.
+#[derive(Clone, Default)]
+struct SharedStore(Arc<std::sync::Mutex<ocpp_kit::engine::MemStore>>);
+
+impl ocpp_kit::engine::MessageStore for SharedStore {
+    fn push(
+        &mut self,
+        entry: &ocpp_kit::engine::QueuedCall,
+    ) -> Result<ocpp_kit::engine::Seq, ocpp_kit::engine::StoreError> {
+        self.0.lock().unwrap().push(entry)
+    }
+    fn pending(
+        &self,
+    ) -> Result<
+        Vec<(ocpp_kit::engine::Seq, ocpp_kit::engine::QueuedCall)>,
+        ocpp_kit::engine::StoreError,
+    > {
+        self.0.lock().unwrap().pending()
+    }
+    fn ack(&mut self, seq: ocpp_kit::engine::Seq) -> Result<(), ocpp_kit::engine::StoreError> {
+        self.0.lock().unwrap().ack(seq)
+    }
+    fn set_attempts(
+        &mut self,
+        seq: ocpp_kit::engine::Seq,
+        attempts: u32,
+    ) -> Result<(), ocpp_kit::engine::StoreError> {
+        self.0.lock().unwrap().set_attempts(seq, attempts)
+    }
+    fn len(&self) -> Result<usize, ocpp_kit::engine::StoreError> {
+        self.0.lock().unwrap().len()
+    }
+}
+
+/// `store_poll`: a message another process pushes after the station connected is sent
+/// without a restart, and only once.
+#[tokio::test]
+async fn a_station_with_store_poll_sends_what_another_process_queued() {
+    use ocpp_kit::engine::MessageStore as _;
+
+    let csms_handler = Arc::new(CsmsSide::new(v2_1::RegistrationStatus::Accepted));
+    let (port, _csms) = start_csms(csms_handler.clone(), accept_all).await;
+    let store = SharedStore::default();
+    let station = Station::builder()
+        .identity("CS-POLL")
+        .unwrap()
+        .url(format!("ws://127.0.0.1:{port}/ocpp"))
+        .versions([Version::V2_1])
+        .security_profile(SecurityProfile::BasicAuth)
+        .password(ocpp_kit::transport::BasicAuthPassword::utf8("0123456789abcdef").unwrap())
+        .ping_interval(None)
+        .handler(StationSide)
+        .store(store.clone())
+        .store_poll(Duration::from_millis(20))
+        .build()
+        .unwrap()
+        .spawn()
+        .unwrap();
+    boot(&station).await;
+
+    // The other process.
+    store
+        .clone()
+        .push(&ocpp_kit::engine::QueuedCall {
+            action: "TransactionEvent".into(),
+            payload: RawValue::from_string(
+                r#"{"eventType":"Updated","timestamp":"2026-11-07T12:00:00Z","triggerReason":"MeterValuePeriodic","seqNo":1,"transactionInfo":{"transactionId":"tx-meter"}}"#
+                    .into(),
+            )
+            .unwrap(),
+            kind: ocpp_kit::message::MessageKind::Call,
+            attempts: 0,
+            transactional: true,
+        })
+        .unwrap();
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while store.len().unwrap() > 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the pushed message was delivered and acknowledged");
+    // Several more polls: none may send it again.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(csms_handler.transaction_events.load(Ordering::SeqCst), 1);
+
+    station.shutdown(Duration::from_secs(2)).await;
 }

@@ -766,21 +766,92 @@ impl<S: MessageStore> Engine<S> {
             heartbeat_at: None,
         };
         for (seq, entry) in engine.store.pending()? {
-            let token = engine.mint_token();
-            engine.queue.push_back(Pending {
-                token,
-                action: entry.action,
-                payload: entry.payload,
-                kind: entry.kind,
-                transactional: entry.transactional,
-                attempts: entry.attempts,
-                seq: Some(seq),
-                not_before: None,
-                triggered: false,
-                queue_when_offline: true,
-            });
+            let pending = engine.stored(seq, entry);
+            engine.queue.push_back(pending);
         }
         Ok(engine)
+    }
+
+    /// Queues what another process added to the store since this engine was built.
+    ///
+    /// The engine reads its store when it is built ([`with_store`](Self::with_store)) and
+    /// otherwise only writes it. With a store shared between processes — a station and a
+    /// metering daemon on one SQLite file — a message the other process pushes is durable at
+    /// once but would leave only on the next start. This reads [`MessageStore::pending`] again
+    /// and queues every entry whose [`Seq`] the engine does not already hold, queued or in
+    /// flight, so calling it twice queues nothing twice.
+    ///
+    /// Among messages not yet sent, stored ones are ordered by `Seq`, so each producer's
+    /// messages leave in the order it pushed them — what per-transaction ordering requires
+    /// (1.6 §3.7, E04.FR.01–03), since one transaction's messages come from one producer. A
+    /// message already sent is never reordered. Adoption obeys
+    /// [`OfflinePolicy::max_queued`]: what does not fit stays in the store, still counted by
+    /// [`MessageStore::len`], and is adopted by a later call. During a
+    /// [`shutdown`](Self::shutdown) drain nothing is adopted.
+    ///
+    /// Only one engine may drain a store. A second one would adopt — and send — every entry
+    /// the first holds; other processes push and never drain.
+    ///
+    /// Returns how many entries were queued. The Tokio station calls this on connect and
+    /// periodically when built with `store_poll`.
+    ///
+    /// # Errors
+    ///
+    /// The store's error from `pending()`. The queue is unchanged.
+    pub fn adopt_pending(&mut self, now: Instant) -> Result<usize, StoreError> {
+        self.advance(now);
+        if self.draining.is_some() {
+            return Ok(0);
+        }
+        let held: BTreeSet<Seq> = self
+            .queue
+            .iter()
+            .filter_map(|entry| entry.seq)
+            .chain(self.inflight.as_ref().and_then(|inflight| inflight.seq))
+            .collect();
+        let mut room = self
+            .config
+            .offline
+            .max_queued
+            .saturating_sub(self.queue.len());
+        let mut adopted = 0;
+        for (seq, entry) in self.store.pending()? {
+            if held.contains(&seq) {
+                continue;
+            }
+            if room == 0 {
+                break;
+            }
+            let pending = self.stored(seq, entry);
+            let at = self
+                .queue
+                .iter()
+                .position(|queued| queued.seq.is_some_and(|queued| queued > seq))
+                .unwrap_or(self.queue.len());
+            self.queue.insert(at, pending);
+            room -= 1;
+            adopted += 1;
+        }
+        if adopted > 0 {
+            self.pump();
+        }
+        Ok(adopted)
+    }
+
+    /// The queue entry for a message read back from the store.
+    fn stored(&mut self, seq: Seq, entry: QueuedCall) -> Pending {
+        Pending {
+            token: self.mint_token(),
+            action: entry.action,
+            payload: entry.payload,
+            kind: entry.kind,
+            transactional: entry.transactional,
+            attempts: entry.attempts,
+            seq: Some(seq),
+            not_before: None,
+            triggered: false,
+            queue_when_offline: true,
+        }
     }
 
     /// Changes the message timeout.

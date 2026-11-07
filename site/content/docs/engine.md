@@ -116,11 +116,14 @@ $ cargo run --example sqlite_store
 queued 100 messages from two processes (99 hand-overs between them)
 delivered 30, then crashed with tx-station 15 in flight
 rebooted: tx-station 15 redelivered first; all 100 acknowledged once, in order; queue empty
+live: 5 rows pushed while running were adopted and sent once, in order
 ```
 
-With a shared store, keep exactly one consumer: the engine reads `pending()` when it is built,
-so other processes should only push — their messages are durable at once and go out on the
-next engine start. Delivery is at-least-once on the wire (a crash before the answer replays
+With a shared store, keep exactly one consumer: other processes only push. Their messages are
+durable at once and go out when the engine adopts them — `Engine::adopt_pending` queues every
+stored message the engine does not hold, in sequence order and within `max_queued`, and a
+Tokio station built with `.store_poll(interval)` calls it on connect and every interval.
+Delivery is at-least-once on the wire (a crash before the answer replays
 the message); the CSMS deduplicates `TransactionEvent` by `transactionId` and `seqNo`.
 
 **A `MessageId` is answered once.** Part 4 §4.2.3 names "an existing message with the same

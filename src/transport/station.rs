@@ -39,6 +39,7 @@ pub struct StationBuilder<S: MessageStore = MemStore> {
     engine: Option<EngineConfig>,
     handler: Option<Arc<dyn Handler>>,
     store: S,
+    store_poll: Option<Duration>,
     ws_config: WsConfig,
     #[cfg(feature = "compression")]
     compression: bool,
@@ -62,6 +63,7 @@ impl Default for StationBuilder<MemStore> {
             engine: None,
             handler: None,
             store: MemStore::new(),
+            store_poll: None,
             ws_config: WsConfig::default(),
             // Part 4 §3.4 Table 2: optional for a Charging Station, but recommended — it is
             // the cheapest way to cut a fleet's mobile data bill.
@@ -230,11 +232,27 @@ impl<S: MessageStore + Send + 'static> StationBuilder<S> {
             engine: self.engine,
             handler: self.handler,
             store,
+            store_poll: self.store_poll,
             ws_config: self.ws_config,
             #[cfg(feature = "compression")]
             compression: self.compression,
             profiles: self.profiles,
         }
+    }
+
+    /// Picks up messages another process adds to the store while the station runs.
+    ///
+    /// For a store shared between processes — a station and a metering daemon on one
+    /// database. While connected, the station calls
+    /// [`Engine::adopt_pending`](crate::engine::Engine::adopt_pending) on connect and then
+    /// every `interval`, so a message the other process pushed leaves within one interval
+    /// instead of at the next start. A store failure is reported as
+    /// [`Event::Violation`](super::Event::Violation). Off by default: with a store only this
+    /// station writes, there is nothing to pick up.
+    #[must_use]
+    pub fn store_poll(mut self, interval: Duration) -> Self {
+        self.store_poll = Some(interval);
+        self
     }
 
     /// Builds the station.
@@ -304,6 +322,7 @@ impl<S: MessageStore + Send + 'static> StationBuilder<S> {
                 .handler
                 .unwrap_or_else(|| Arc::new(super::connection::NotImplemented)),
             store: self.store,
+            store_poll: self.store_poll,
         })
     }
 }
@@ -331,6 +350,7 @@ pub struct Station<S: MessageStore = MemStore> {
     engine_config: EngineConfig,
     handler: Arc<dyn Handler>,
     store: S,
+    store_poll: Option<Duration>,
 }
 
 impl Station<MemStore> {
@@ -397,6 +417,7 @@ impl<S: MessageStore + Send + 'static> Station<S> {
 
         let engine = Engine::with_store(self.engine_config, self.store)?;
         let mut driver = Driver::new(engine, shared.clone(), self.handler, state_tx);
+        driver.store_poll = self.store_poll;
         let connector = self.connector;
         let keepalive = self.keepalive;
         let backoff = self.backoff;
