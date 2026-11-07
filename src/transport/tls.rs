@@ -103,6 +103,7 @@ impl ClientTls {
         ClientTlsBuilder {
             roots: rustls::RootCertStore::empty(),
             identity: None,
+            allow_wildcards: false,
         }
     }
 
@@ -140,10 +141,75 @@ impl fmt::Debug for ClientTls {
     }
 }
 
+/// The standard verifier, plus the refusal of a wildcard name ([`ClientTlsBuilder::
+/// allow_wildcard_server_certificates`]).
+///
+/// The chain, validity and host name are checked by the inner verifier first; only a
+/// certificate that already passes is then refused for carrying a wildcard. rustls matches the
+/// subjectAltName and ignores the commonName, so the SAN is where a wildcard takes effect.
+#[derive(Debug)]
+struct NoWildcards {
+    inner: Arc<rustls::client::WebPkiServerVerifier>,
+}
+
+impl rustls::client::danger::ServerCertVerifier for NoWildcards {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        server_name: &ServerName<'_>,
+        ocsp_response: &[u8],
+        now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        let verified = self.inner.verify_server_cert(
+            end_entity,
+            intermediates,
+            server_name,
+            ocsp_response,
+            now,
+        )?;
+        let certificate = webpki::EndEntityCert::try_from(end_entity).map_err(|_| {
+            rustls::Error::InvalidCertificate(rustls::CertificateError::BadEncoding)
+        })?;
+        if certificate
+            .valid_dns_names()
+            .any(|name| name.starts_with("*."))
+        {
+            return Err(rustls::Error::InvalidCertificate(
+                rustls::CertificateError::ApplicationVerificationFailure,
+            ));
+        }
+        Ok(verified)
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        self.inner.verify_tls12_signature(message, cert, dss)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        self.inner.verify_tls13_signature(message, cert, dss)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.inner.supported_verify_schemes()
+    }
+}
+
 /// Collects the trust anchors and, for profile 3, the client identity.
 pub struct ClientTlsBuilder {
     roots: rustls::RootCertStore,
     identity: Option<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)>,
+    allow_wildcards: bool,
 }
 
 impl ClientTlsBuilder {
@@ -180,6 +246,19 @@ impl ClientTlsBuilder {
         Ok(self)
     }
 
+    /// Accepts a CSMS certificate whose name is a wildcard (`*.example.com`).
+    ///
+    /// Refused by default, on every version: "OCPP-compliant behavior is that a Charging
+    /// Station rejects a connection from a CSMS that presents a wildcard certificate. It is
+    /// highly RECOMMENDED to not allow wildcard certificates" (2.x
+    /// `SecurityCtrlr.AllowCSMSTLSWildcards`; 1.6 Security Whitepaper edition 4 §7.7,
+    /// `AllowCentralSystemTLSWildcards`). Call this when that variable is `true`.
+    #[must_use]
+    pub fn allow_wildcard_server_certificates(mut self) -> Self {
+        self.allow_wildcards = true;
+        self
+    }
+
     /// Builds the configuration.
     pub fn build(self) -> Result<ClientTls, TlsError> {
         if self.roots.is_empty() {
@@ -187,9 +266,23 @@ impl ClientTlsBuilder {
                 "no trust anchors: call `webpki_roots()` or `root_file()`".to_owned(),
             ));
         }
-        let builder = rustls::ClientConfig::builder_with_provider(provider())
+        let provider = provider();
+        let webpki = rustls::client::WebPkiServerVerifier::builder_with_provider(
+            Arc::new(self.roots),
+            provider.clone(),
+        )
+        .build()
+        .map_err(|error| TlsError::Pem(error.to_string()))?;
+        let verifier: Arc<dyn rustls::client::danger::ServerCertVerifier> = if self.allow_wildcards
+        {
+            webpki
+        } else {
+            Arc::new(NoWildcards { inner: webpki })
+        };
+        let builder = rustls::ClientConfig::builder_with_provider(provider)
             .with_safe_default_protocol_versions()?
-            .with_root_certificates(self.roots);
+            .dangerous()
+            .with_custom_certificate_verifier(verifier);
         let config = match self.identity {
             Some((chain, key)) => builder.with_client_auth_cert(chain, key)?,
             None => builder.with_no_client_auth(),
@@ -277,5 +370,85 @@ impl fmt::Debug for ServerTls {
         f.debug_struct("ServerTls")
             .field("mutual", &self.mutual)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod wildcard_tests {
+    use super::*;
+    use rustls::client::danger::ServerCertVerifier as _;
+
+    // `testdata/`: a P-256 CA and two leaves it signed — `csms.example.com` and
+    // `*.example.com` — valid for 100 years from 2026-11-07, made with `openssl req -x509` /
+    // `openssl x509 -req`. Committed rather than generated per run so the tests need no
+    // certificate-generating dependency.
+    const CA: &[u8] = include_bytes!("testdata/ca.pem");
+    const PLAIN: &[u8] = include_bytes!("testdata/plain.pem");
+    const WILD: &[u8] = include_bytes!("testdata/wild.pem");
+
+    fn der(pem: &[u8]) -> CertificateDer<'static> {
+        CertificateDer::from_pem_slice(pem).unwrap()
+    }
+
+    fn verifier(allow_wildcards: bool) -> Arc<rustls::ClientConfig> {
+        let mut builder = ClientTls::builder().root_der(der(CA)).unwrap();
+        if allow_wildcards {
+            builder = builder.allow_wildcard_server_certificates();
+        }
+        builder.build().unwrap().config
+    }
+
+    /// 2.x `AllowCSMSTLSWildcards`, 1.6 `AllowCentralSystemTLSWildcards`: a wildcard CSMS
+    /// certificate is refused unless allowed; a plain one is accepted either way.
+    #[test]
+    fn a_wildcard_csms_certificate_is_refused_unless_allowed() {
+        let name = ServerName::try_from("csms.example.com").unwrap();
+        let now = rustls::pki_types::UnixTime::now();
+        let check = |leaf: &[u8], name: &ServerName<'_>, allow: bool| {
+            let leaf = der(leaf);
+            let mut roots = rustls::RootCertStore::empty();
+            roots.add(der(CA)).unwrap();
+            let inner = rustls::client::WebPkiServerVerifier::builder_with_provider(
+                Arc::new(roots),
+                provider(),
+            )
+            .build()
+            .unwrap();
+            if allow {
+                inner
+                    .verify_server_cert(&leaf, &[], name, &[], now)
+                    .map(|_| ())
+            } else {
+                NoWildcards { inner }
+                    .verify_server_cert(&leaf, &[], name, &[], now)
+                    .map(|_| ())
+            }
+        };
+        let other = ServerName::try_from("other.example.org").unwrap();
+        assert!(check(PLAIN, &name, false).is_ok());
+        assert_eq!(
+            check(WILD, &name, false).unwrap_err(),
+            rustls::Error::InvalidCertificate(
+                rustls::CertificateError::ApplicationVerificationFailure
+            )
+        );
+        assert!(check(WILD, &name, true).is_ok());
+        // A certificate that fails the ordinary checks still fails them first.
+        assert!(matches!(
+            check(PLAIN, &other, false).unwrap_err(),
+            rustls::Error::InvalidCertificate(
+                rustls::CertificateError::NotValidForName
+                    | rustls::CertificateError::NotValidForNameContext { .. }
+            )
+        ));
+    }
+
+    /// The builder wires the refusing verifier in by default.
+    #[test]
+    fn the_builder_refuses_wildcards_by_default() {
+        let strict = verifier(false);
+        let lax = verifier(true);
+        assert!(format!("{strict:?}").contains("NoWildcards"));
+        assert!(!format!("{lax:?}").contains("NoWildcards"));
     }
 }

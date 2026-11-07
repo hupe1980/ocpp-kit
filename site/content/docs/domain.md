@@ -184,42 +184,49 @@ AuthorizeRequest."* A stale `Blocked` in a local list is a reason to ask, not a 
 refuse — the CSMS is the authority, and it may have changed its mind since the list was last
 synchronised.
 
+A token is its value **and** its type (C01.FR.25): `IdToken::new("04A2", "ISO14443")` and
+`IdToken::new("04A2", "Local")` are two tokens, and a 1.6 `idTag` is `IdToken::tag`. The cache
+never stores a `Central` token (C05.FR.02), and with `with_lifetime(AuthCacheLifeTime)` an entry
+without its own `cacheExpiryDateTime` expires that long after the CSMS last answered for it.
+
 ```rust
 use ocpp_kit::station::authorization::{
-    AuthorizationPolicy, AuthorizationStatus, Authorizer, Decision, IdTokenInfo, LocalSource,
-    UpdateType,
+    AuthorizationPolicy, AuthorizationStatus, Authorizer, Decision, IdToken, IdTokenInfo,
+    LocalSource, UpdateType,
 };
 use ocpp_kit::types::DateTime;
+
+let now = DateTime::parse("2024-06-01T12:00:00Z").unwrap();
+let blocked = IdToken::new("BLOCKED", "ISO14443");
+let cached = IdToken::new("CACHED", "ISO14443");
 
 let mut authorizer =
     Authorizer::new().with_policy(AuthorizationPolicy::default().local_pre_authorize(true));
 authorizer.list.update(
     UpdateType::Full,
     1,
-    vec![("BLOCKED".into(), Some(IdTokenInfo::new(AuthorizationStatus::Blocked)))],
+    vec![(blocked.clone(), Some(IdTokenInfo::new(AuthorizationStatus::Blocked)))],
 );
-authorizer.remember("CACHED", IdTokenInfo::accepted());
-
-let now = DateTime::parse("2024-06-01T12:00:00Z").unwrap();
+authorizer.remember(cached.clone(), IdTokenInfo::accepted(), now);
 
 // Online, a local refusal is a reason to ask the CSMS (C10).
-assert_eq!(authorizer.decide("BLOCKED", true, now), Decision::AskCsms);
+assert_eq!(authorizer.decide(&blocked, true, now), Decision::AskCsms);
 
 // Offline there is nobody to appeal to, so it stands.
 assert!(matches!(
-    authorizer.decide("BLOCKED", false, now),
+    authorizer.decide(&blocked, false, now),
     Decision::Local { source: LocalSource::LocalList, .. }
 ));
 
 // With LocalPreAuthorize, the cache answers while online too (C06).
 assert!(matches!(
-    authorizer.decide("CACHED", true, now),
+    authorizer.decide(&cached, true, now),
     Decision::Local { source: LocalSource::Cache, .. }
 ));
 
-// And an unknown token offline carries the OfflineTxForUnknownIdEnabled answer with it.
+// The same value under another type is not the same token.
 assert_eq!(
-    authorizer.decide("NEVER-SEEN", false, now),
+    authorizer.decide(&IdToken::new("CACHED", "Local"), false, now),
     Decision::OfflineUnknown { start_anyway: false }
 );
 ```

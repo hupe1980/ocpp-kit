@@ -536,7 +536,7 @@ impl Connector {
 
         let authorization = if profile.security.uses_basic_auth() {
             let password = profile.password.as_ref().expect("checked by the builder");
-            Some(basic_auth_header(&self.identity, password))
+            Some(basic_auth_header(&endpoint.identity, password))
         } else {
             None
         };
@@ -598,6 +598,8 @@ struct Endpoint {
     path: String,
     /// The full URL, which is what a configuration error quotes back.
     url: String,
+    /// The identity this slot connects under: the profile's own, else the station's.
+    identity: Identity,
 }
 
 impl Endpoint {
@@ -608,6 +610,7 @@ impl Endpoint {
         identity: &Identity,
         default_versions: &Subprotocol,
     ) -> Result<Self, TransportError> {
+        let identity = profile.identity.as_ref().unwrap_or(identity);
         let endpoint = Self::parse(profile.slot, &profile.url, identity)?;
         let slot = profile.slot;
         let security = profile.security;
@@ -698,6 +701,7 @@ impl Endpoint {
             authority,
             path,
             url,
+            identity: identity.clone(),
         })
     }
 }
@@ -762,6 +766,30 @@ mod tests {
             .err()
             .expect("profile 1 needs a password");
         assert!(error.to_string().contains("needs a password"), "{error}");
+    }
+
+    /// B09.FR.18: a profile with its own identity connects under it — path and Basic-auth
+    /// user — and one without uses the station's.
+    #[test]
+    fn a_profile_can_connect_under_its_own_identity() {
+        use super::super::network_profile::{NetworkProfile, NetworkProfiles};
+
+        let password = || BasicAuthPassword::utf8("0123456789abcdef").unwrap();
+        let station = Station::builder()
+            .identity("CS-0001")
+            .unwrap()
+            .network_profiles(NetworkProfiles::new([
+                NetworkProfile::new(0, "ws://primary/ocpp").password(password()),
+                NetworkProfile::new(1, "ws://other-csms/ocpp")
+                    .identity(Identity::new("OTHER-7").unwrap())
+                    .password(password()),
+            ]))
+            .build()
+            .unwrap();
+        let endpoints = &station.connector.endpoints;
+        assert_eq!(endpoints[&0].path, "/ocpp/CS-0001");
+        assert_eq!(endpoints[&1].path, "/ocpp/OTHER-7");
+        assert_eq!(endpoints[&1].identity.as_str(), "OTHER-7");
     }
 
     /// B09.FR.16: a profile without its own password uses the station's; B09.FR.18: one

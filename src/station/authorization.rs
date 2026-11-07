@@ -7,7 +7,7 @@
 //! before), and only then the CSMS itself.
 
 use alloc::collections::BTreeMap;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 
@@ -50,6 +50,56 @@ impl AuthorizationStatus {
 impl fmt::Display for AuthorizationStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+/// An `IdToken` as the specification compares it: by value **and** type.
+///
+/// C01.FR.25: "Two `IdTokenType` elements are considered to be equal when they have the same
+/// value for the fields `idToken.idToken` and `idToken.type`"; `additionalInfo` is not
+/// compared.
+/// The same RFID UID presented as `ISO14443` and as `Local` is two tokens. 1.6 has only the
+/// `idTag`, so its tokens have no type ([`IdToken::tag`]).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct IdToken {
+    /// `idToken.idToken` (2.x) or the `idTag` (1.6).
+    pub value: String,
+    /// `idToken.type` as sent (`ISO14443`, `Central`, `eMAID`, …); `None` on 1.6.
+    pub kind: Option<String>,
+}
+
+impl IdToken {
+    /// A 2.x token of the given type.
+    #[must_use]
+    pub fn new(value: impl Into<String>, kind: impl Into<String>) -> Self {
+        Self {
+            value: value.into(),
+            kind: Some(kind.into()),
+        }
+    }
+
+    /// A 1.6 `idTag`, which has no type.
+    #[must_use]
+    pub fn tag(value: impl Into<String>) -> Self {
+        Self {
+            value: value.into(),
+            kind: None,
+        }
+    }
+
+    /// Whether this is a `Central` token, which is never cached (C05.FR.02).
+    #[must_use]
+    pub fn is_central(&self) -> bool {
+        self.kind.as_deref() == Some("Central")
+    }
+}
+
+impl fmt::Display for IdToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.kind {
+            Some(kind) => write!(f, "{} ({kind})", self.value),
+            None => f.write_str(&self.value),
+        }
     }
 }
 
@@ -147,7 +197,7 @@ pub enum UpdateStatus {
 #[derive(Clone, Debug, Default)]
 pub struct LocalAuthorizationList {
     version: i32,
-    entries: BTreeMap<String, IdTokenInfo>,
+    entries: BTreeMap<IdToken, IdTokenInfo>,
     limit: Option<usize>,
 }
 
@@ -194,7 +244,7 @@ impl LocalAuthorizationList {
         &mut self,
         update: UpdateType,
         version: i32,
-        entries: Vec<(String, Option<IdTokenInfo>)>,
+        entries: Vec<(IdToken, Option<IdTokenInfo>)>,
     ) -> UpdateStatus {
         if update == UpdateType::Differential && version <= self.version {
             return UpdateStatus::VersionMismatch;
@@ -241,9 +291,9 @@ impl LocalAuthorizationList {
         self.version = 0;
     }
 
-    /// Looks a token up.
+    /// Looks a token up, by value and type (C01.FR.25).
     #[must_use]
-    pub fn get(&self, id_token: &str) -> Option<&IdTokenInfo> {
+    pub fn get(&self, id_token: &IdToken) -> Option<&IdTokenInfo> {
         self.entries.get(id_token)
     }
 }
@@ -253,12 +303,27 @@ impl LocalAuthorizationList {
 /// Bounded and least-recently-used, because a Charging Station has finite memory and an
 /// unbounded cache is a slow leak. `AuthCacheCtrlr.Enabled` decides whether it is consulted
 /// at all.
+///
+/// Two rules decide what may stay:
+///
+/// * A `Central` token is never stored, "in any message" (C05.FR.02).
+/// * An entry without `cacheExpiryDateTime` expires `AuthCacheLifeTime` seconds after it was
+///   last updated (C10.FR.08/10). One with it follows that date (C10.FR.13), reported as
+///   `Expired` by [`IdTokenInfo::status_at`].
 #[derive(Clone, Debug)]
 pub struct AuthorizationCache {
-    entries: BTreeMap<String, (u64, IdTokenInfo)>,
+    entries: BTreeMap<IdToken, CacheEntry>,
     capacity: usize,
     clock: u64,
     enabled: bool,
+    lifetime: Option<i64>,
+}
+
+#[derive(Clone, Debug)]
+struct CacheEntry {
+    used: u64,
+    updated: DateTime,
+    info: IdTokenInfo,
 }
 
 impl Default for AuthorizationCache {
@@ -276,7 +341,16 @@ impl AuthorizationCache {
             capacity: capacity.max(1),
             clock: 0,
             enabled: true,
+            lifetime: None,
         }
+    }
+
+    /// Sets `AuthCacheCtrlr.LifeTime` (`AuthCacheLifeTime`), in seconds: how long an entry
+    /// without its own `cacheExpiryDateTime` stays after it was last updated.
+    #[must_use]
+    pub fn with_lifetime(mut self, seconds: u32) -> Self {
+        self.lifetime = Some(i64::from(seconds));
+        self
     }
 
     /// Turns the cache on or off (`AuthCacheCtrlr.Enabled`).
@@ -305,19 +379,32 @@ impl AuthorizationCache {
         self.entries.is_empty()
     }
 
-    /// Records what the CSMS answered.
-    pub fn remember(&mut self, id_token: impl Into<String>, info: IdTokenInfo) {
-        if !self.enabled {
+    /// Records what the CSMS answered at `now`. A `Central` token is not stored (C05.FR.02),
+    /// and an answer whose `cacheExpiryDateTime` has already passed removes the entry rather
+    /// than storing it (C10.FR.13).
+    pub fn remember(&mut self, id_token: IdToken, info: IdTokenInfo, now: DateTime) {
+        if !self.enabled || id_token.is_central() {
+            return;
+        }
+        if info.expires.is_some_and(|expiry| expiry <= now) {
+            self.entries.remove(&id_token);
             return;
         }
         self.clock += 1;
-        let stamp = self.clock;
-        self.entries.insert(id_token.into(), (stamp, info));
+        let used = self.clock;
+        self.entries.insert(
+            id_token,
+            CacheEntry {
+                used,
+                updated: now,
+                info,
+            },
+        );
         while self.entries.len() > self.capacity {
             if let Some(oldest) = self
                 .entries
                 .iter()
-                .min_by_key(|(_, (stamp, _))| *stamp)
+                .min_by_key(|(_, entry)| entry.used)
                 .map(|(token, _)| token.clone())
             {
                 self.entries.remove(&oldest);
@@ -327,16 +414,26 @@ impl AuthorizationCache {
         }
     }
 
-    /// Looks a token up, refreshing its recency.
-    pub fn get(&mut self, id_token: &str) -> Option<IdTokenInfo> {
+    /// Looks a token up at `now`, refreshing its recency. An entry past `AuthCacheLifeTime`
+    /// is removed and not returned (C10.FR.10).
+    pub fn get(&mut self, id_token: &IdToken, now: DateTime) -> Option<IdTokenInfo> {
         if !self.enabled {
             return None;
         }
+        let entry = self.entries.get(id_token)?;
+        if entry.info.expires.is_none()
+            && self.lifetime.is_some_and(|lifetime| {
+                now.timestamp().as_second() - entry.updated.timestamp().as_second() > lifetime
+            })
+        {
+            self.entries.remove(id_token);
+            return None;
+        }
         self.clock += 1;
-        let stamp = self.clock;
+        let used = self.clock;
         let entry = self.entries.get_mut(id_token)?;
-        entry.0 = stamp;
-        Some(entry.1.clone())
+        entry.used = used;
+        Some(entry.info.clone())
     }
 
     /// Empties the cache, as `ClearCache` does.
@@ -506,7 +603,7 @@ impl Authorizer {
     /// Decides what to do with a token.
     ///
     /// `online` says whether the CSMS is reachable right now.
-    pub fn decide(&mut self, id_token: &str, online: bool, now: DateTime) -> Decision {
+    pub fn decide(&mut self, id_token: &IdToken, online: bool, now: DateTime) -> Decision {
         // Whether a local answer may be acted on at all, per the two variables whose entire
         // purpose is to answer that question.
         let may_use_local = if online {
@@ -523,7 +620,7 @@ impl Authorizer {
             .map(|info| (LocalSource::LocalList, info))
             .or_else(|| {
                 self.cache
-                    .get(id_token)
+                    .get(id_token, now)
                     .map(|info| (LocalSource::Cache, info))
             });
 
@@ -566,9 +663,9 @@ impl Authorizer {
         }
     }
 
-    /// Records what the CSMS answered, so the next offline period can use it.
-    pub fn remember(&mut self, id_token: &str, info: IdTokenInfo) {
-        self.cache.remember(id_token.to_string(), info);
+    /// Records what the CSMS answered at `now`, so the next offline period can use it.
+    pub fn remember(&mut self, id_token: IdToken, info: IdTokenInfo, now: DateTime) {
+        self.cache.remember(id_token, info, now);
     }
 }
 
@@ -591,7 +688,7 @@ mod tests {
             list.update(
                 UpdateType::Full,
                 5,
-                alloc::vec![("A".into(), Some(IdTokenInfo::accepted()))]
+                alloc::vec![(IdToken::tag("A"), Some(IdTokenInfo::accepted()))]
             ),
             UpdateStatus::Accepted
         );
@@ -605,14 +702,14 @@ mod tests {
                 UpdateType::Differential,
                 6,
                 alloc::vec![
-                    ("B".into(), Some(IdTokenInfo::accepted())),
-                    ("A".into(), None)
+                    (IdToken::tag("B"), Some(IdTokenInfo::accepted())),
+                    (IdToken::tag("A"), None)
                 ]
             ),
             UpdateStatus::Accepted
         );
-        assert!(list.get("A").is_none());
-        assert!(list.get("B").is_some());
+        assert!(list.get(&IdToken::tag("A")).is_none());
+        assert!(list.get(&IdToken::tag("B")).is_some());
     }
 
     #[test]
@@ -621,14 +718,14 @@ mod tests {
         let _ = list.update(
             UpdateType::Full,
             1,
-            alloc::vec![("A".into(), Some(IdTokenInfo::accepted()))],
+            alloc::vec![(IdToken::tag("A"), Some(IdTokenInfo::accepted()))],
         );
         let _ = list.update(
             UpdateType::Full,
             2,
-            alloc::vec![("B".into(), Some(IdTokenInfo::accepted()))],
+            alloc::vec![(IdToken::tag("B"), Some(IdTokenInfo::accepted()))],
         );
-        assert!(list.get("A").is_none());
+        assert!(list.get(&IdToken::tag("A")).is_none());
         assert_eq!(list.len(), 1);
     }
 
@@ -640,8 +737,8 @@ mod tests {
                 UpdateType::Full,
                 1,
                 alloc::vec![
-                    ("A".into(), Some(IdTokenInfo::accepted())),
-                    ("B".into(), Some(IdTokenInfo::accepted()))
+                    (IdToken::tag("A"), Some(IdTokenInfo::accepted())),
+                    (IdToken::tag("B"), Some(IdTokenInfo::accepted()))
                 ]
             ),
             UpdateStatus::Failed
@@ -656,17 +753,17 @@ mod tests {
             1,
             alloc::vec![
                 (
-                    "BLOCKED".into(),
+                    IdToken::tag("BLOCKED"),
                     Some(IdTokenInfo::new(AuthorizationStatus::Blocked))
                 ),
                 (
-                    "OLD".into(),
+                    IdToken::tag("OLD"),
                     Some(IdTokenInfo::accepted().expiring(at("2024-01-01T00:00:00Z")))
                 ),
-                ("LISTED".into(), Some(IdTokenInfo::accepted())),
+                (IdToken::tag("LISTED"), Some(IdTokenInfo::accepted())),
             ],
         );
-        authorizer.remember("CACHED", IdTokenInfo::accepted());
+        authorizer.remember(IdToken::tag("CACHED"), IdTokenInfo::accepted(), now());
         authorizer
     }
 
@@ -675,9 +772,13 @@ mod tests {
     #[test]
     fn the_list_outranks_the_cache_and_expiry_is_honoured() {
         let mut authorizer = seeded();
-        authorizer.remember("LISTED", IdTokenInfo::new(AuthorizationStatus::Blocked));
+        authorizer.remember(
+            IdToken::tag("LISTED"),
+            IdTokenInfo::new(AuthorizationStatus::Blocked),
+            now(),
+        );
 
-        let decision = authorizer.decide("LISTED", false, now());
+        let decision = authorizer.decide(&IdToken::tag("LISTED"), false, now());
         assert!(
             matches!(
                 &decision,
@@ -689,7 +790,7 @@ mod tests {
             "{decision:?}"
         );
 
-        let decision = authorizer.decide("OLD", false, now());
+        let decision = authorizer.decide(&IdToken::tag("OLD"), false, now());
         assert!(
             matches!(&decision, Decision::Local { info, .. }
                 if info.status == AuthorizationStatus::Expired),
@@ -704,9 +805,12 @@ mod tests {
     #[test]
     fn an_online_station_asks_the_csms_about_a_locally_refused_token_c10() {
         let mut authorizer = seeded();
-        assert_eq!(authorizer.decide("BLOCKED", true, now()), Decision::AskCsms);
         assert_eq!(
-            authorizer.decide("NEVER-SEEN", true, now()),
+            authorizer.decide(&IdToken::tag("BLOCKED"), true, now()),
+            Decision::AskCsms
+        );
+        assert_eq!(
+            authorizer.decide(&IdToken::tag("NEVER-SEEN"), true, now()),
             Decision::AskCsms
         );
     }
@@ -716,7 +820,7 @@ mod tests {
     #[test]
     fn an_offline_station_honours_a_local_refusal() {
         let mut authorizer = seeded();
-        let decision = authorizer.decide("BLOCKED", false, now());
+        let decision = authorizer.decide(&IdToken::tag("BLOCKED"), false, now());
         assert!(
             matches!(&decision, Decision::Local { info, .. }
                 if info.status == AuthorizationStatus::Blocked),
@@ -732,7 +836,7 @@ mod tests {
         let mut authorizer =
             seeded().with_policy(AuthorizationPolicy::default().local_authorize_offline(false));
         assert_eq!(
-            authorizer.decide("LISTED", false, now()),
+            authorizer.decide(&IdToken::tag("LISTED"), false, now()),
             Decision::OfflineUnknown {
                 start_anyway: false
             }
@@ -745,7 +849,7 @@ mod tests {
     fn local_pre_authorize_lets_the_cache_answer_while_online_c06() {
         let mut authorizer =
             seeded().with_policy(AuthorizationPolicy::default().local_pre_authorize(true));
-        let decision = authorizer.decide("CACHED", true, now());
+        let decision = authorizer.decide(&IdToken::tag("CACHED"), true, now());
         assert!(
             matches!(
                 &decision,
@@ -759,7 +863,10 @@ mod tests {
 
         // Without it, the CSMS is asked even though the cache knows the token.
         let mut strict = seeded();
-        assert_eq!(strict.decide("CACHED", true, now()), Decision::AskCsms);
+        assert_eq!(
+            strict.decide(&IdToken::tag("CACHED"), true, now()),
+            Decision::AskCsms
+        );
     }
 
     /// C13.FR.04 / C15: offline, with `OfflineTxForUnknownIdEnabled`, a token nothing knows
@@ -768,7 +875,7 @@ mod tests {
     fn offline_tx_for_unknown_id_is_reported_with_the_decision_c15() {
         let mut authorizer = seeded();
         assert_eq!(
-            authorizer.decide("NEVER-SEEN", false, now()),
+            authorizer.decide(&IdToken::tag("NEVER-SEEN"), false, now()),
             Decision::OfflineUnknown {
                 start_anyway: false
             }
@@ -777,7 +884,7 @@ mod tests {
         let mut permissive =
             seeded().with_policy(AuthorizationPolicy::default().offline_tx_for_unknown_id(true));
         assert_eq!(
-            permissive.decide("NEVER-SEEN", false, now()),
+            permissive.decide(&IdToken::tag("NEVER-SEEN"), false, now()),
             Decision::OfflineUnknown { start_anyway: true }
         );
     }
@@ -790,17 +897,20 @@ mod tests {
         let mut supports = seeded();
         // Offline: expired, and not an unknown id, so refused (C13.FR.05/06).
         assert!(matches!(
-            supports.decide("OLD", false, now()),
+            supports.decide(&IdToken::tag("OLD"), false, now()),
             Decision::Local { info, .. } if info.status == AuthorizationStatus::Expired
         ));
         // Online: disregarded, so the CSMS is asked (C14.FR.05).
-        assert_eq!(supports.decide("OLD", true, now()), Decision::AskCsms);
+        assert_eq!(
+            supports.decide(&IdToken::tag("OLD"), true, now()),
+            Decision::AskCsms
+        );
 
         // Not supported: the date does not count (C13.FR.02/04).
         let mut ignores =
             seeded().with_policy(AuthorizationPolicy::default().local_list_supports_expiry(false));
         assert!(matches!(
-            ignores.decide("OLD", false, now()),
+            ignores.decide(&IdToken::tag("OLD"), false, now()),
             Decision::Local { info, .. } if info.status == AuthorizationStatus::Accepted
         ));
     }
@@ -811,7 +921,7 @@ mod tests {
         let mut authorizer =
             seeded().with_policy(AuthorizationPolicy::default().local_auth_list_enabled(false));
         assert_eq!(
-            authorizer.decide("LISTED", false, now()),
+            authorizer.decide(&IdToken::tag("LISTED"), false, now()),
             Decision::OfflineUnknown {
                 start_anyway: false
             }
@@ -819,25 +929,100 @@ mod tests {
         assert_eq!(authorizer.list.len(), 3, "the list is still there");
     }
 
+    /// C01.FR.25: one value under two types is two tokens.
+    #[test]
+    fn tokens_compare_by_value_and_type() {
+        let mut list = LocalAuthorizationList::new();
+        let _ = list.update(
+            UpdateType::Full,
+            1,
+            alloc::vec![(
+                IdToken::new("04A2", "ISO14443"),
+                Some(IdTokenInfo::accepted())
+            )],
+        );
+        assert!(list.get(&IdToken::new("04A2", "ISO14443")).is_some());
+        assert!(list.get(&IdToken::new("04A2", "Local")).is_none());
+        assert!(list.get(&IdToken::tag("04A2")).is_none());
+    }
+
+    /// C05.FR.02: a `Central` token is never cached.
+    #[test]
+    fn a_central_token_is_never_cached() {
+        let mut cache = AuthorizationCache::default();
+        cache.remember(
+            IdToken::new("APP-1", "Central"),
+            IdTokenInfo::accepted(),
+            now(),
+        );
+        assert!(cache.is_empty());
+        cache.remember(
+            IdToken::new("APP-1", "eMAID"),
+            IdTokenInfo::accepted(),
+            now(),
+        );
+        assert_eq!(cache.len(), 1);
+    }
+
+    /// C10.FR.08/10: without its own expiry, an entry lasts `AuthCacheLifeTime` from its last
+    /// update; C10.FR.13: with one, the date decides.
+    #[test]
+    fn cache_entries_expire_after_the_lifetime_unless_they_carry_a_date() {
+        let mut cache = AuthorizationCache::default().with_lifetime(3600);
+        let token = IdToken::tag("A");
+        cache.remember(
+            token.clone(),
+            IdTokenInfo::accepted(),
+            at("2024-06-01T12:00:00Z"),
+        );
+        assert!(cache.get(&token, at("2024-06-01T12:59:59Z")).is_some());
+        assert!(cache.get(&token, at("2024-06-01T13:00:01Z")).is_none());
+        assert!(cache.is_empty(), "removed, not merely hidden");
+
+        let dated = IdToken::tag("B");
+        let until = at("2024-06-02T00:00:00Z");
+        cache.remember(
+            dated.clone(),
+            IdTokenInfo::accepted().expiring(until),
+            at("2024-06-01T12:00:00Z"),
+        );
+        let later = cache.get(&dated, at("2024-06-01T18:00:00Z")).unwrap();
+        assert_eq!(
+            later.status_at(at("2024-06-01T18:00:00Z")),
+            AuthorizationStatus::Accepted
+        );
+
+        // An answer that is already expired is not stored at all.
+        cache.remember(
+            IdToken::tag("C"),
+            IdTokenInfo::accepted().expiring(at("2024-01-01T00:00:00Z")),
+            now(),
+        );
+        assert!(cache.get(&IdToken::tag("C"), now()).is_none());
+    }
+
     #[test]
     fn the_cache_evicts_the_least_recently_used_token() {
         let mut cache = AuthorizationCache::with_capacity(2);
-        cache.remember("A", IdTokenInfo::accepted());
-        cache.remember("B", IdTokenInfo::accepted());
-        assert!(cache.get("A").is_some(), "touching A makes B the oldest");
-        cache.remember("C", IdTokenInfo::accepted());
-        assert!(cache.get("B").is_none());
-        assert!(cache.get("A").is_some());
-        assert!(cache.get("C").is_some());
+        cache.remember(IdToken::tag("A"), IdTokenInfo::accepted(), now());
+        cache.remember(IdToken::tag("B"), IdTokenInfo::accepted(), now());
+        assert!(
+            cache.get(&IdToken::tag("A"), now()).is_some(),
+            "touching A makes B the oldest"
+        );
+        cache.remember(IdToken::tag("C"), IdTokenInfo::accepted(), now());
+        assert!(cache.get(&IdToken::tag("B"), now()).is_none());
+        assert!(cache.get(&IdToken::tag("A"), now()).is_some());
+        assert!(cache.get(&IdToken::tag("C"), now()).is_some());
     }
 
     #[test]
     fn disabling_the_cache_empties_it() {
         let mut cache = AuthorizationCache::default();
-        cache.remember("A", IdTokenInfo::accepted());
+        cache.remember(IdToken::tag("A"), IdTokenInfo::accepted(), now());
         cache.set_enabled(false);
-        assert!(cache.get("A").is_none());
-        cache.remember("B", IdTokenInfo::accepted());
+        assert!(cache.get(&IdToken::tag("A"), now()).is_none());
+        cache.remember(IdToken::tag("B"), IdTokenInfo::accepted(), now());
         assert!(cache.is_empty(), "{cache:?}");
     }
 }

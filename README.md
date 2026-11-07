@@ -25,7 +25,7 @@ $ cargo add ocpp-kit --features tokio,rustls
 | **L2** | `engine` | A **sans-I/O** protocol engine: correlation, the one-outstanding-`CALL` rule, timeouts, transaction retries, the offline queue, the boot state machine | ✅ `alloc` |
 | **L3** | `transport` | Tokio + `rustls`, with its own RFC 6455 WebSocket and RFC 7692 compression: charging station, CSMS and local controller; security profiles 0 (1.6 only) to 3; network failover | – |
 | **L4** | `station` · `csms` | Opt-in blocks: device model, 1.6 configuration keys, transaction rules, local authorization, composite schedules, an idempotent CSMS ledger, version-agnostic events | partial |
-| — | `standard` | The catalogues that live outside the schemas: security events with their criticality, 74 standardized components, 448 variables, reason codes | ✅ `alloc` |
+| — | `standard` | The catalogues that live outside the schemas: security events with their criticality, 74 standardized components, 458 variables, reason codes | ✅ `alloc` |
 | — | `metering` | Signed meter values: where each version hides the record a customer may be billed for, and how to read its public-key envelope | ✅ `alloc` |
 
 With default features there is no async runtime, no TLS and no domain logic in your binary —
@@ -192,7 +192,7 @@ successfully.
 
 **The vocabulary, not just the messages.** The schemas define the messages; the appendix
 defines what they talk about. `ocpp_kit::standard` carries the 21 security events *with their
-criticality*, the 74 standardized components and their 448 variables *with their data types
+criticality* (and 1.6's own 21, from the Security Whitepaper), the 74 standardized components and their 458 variables *with their data types
 and units*, and the standardized reason codes — extracted from the specification, asserted by
 tests, and wired into the device model so a station gets them right without transcribing a PDF.
 

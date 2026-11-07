@@ -265,7 +265,7 @@ fn appendix_codegen(check: bool) -> Result<()> {
     if !source.exists() {
         bail!(
             "{} is missing. Extract it first (or point OCPP_APPENDIX at an extracted copy):\n  \
-             pdftotext -layout OCPP-2.1_part2_appendices_v20.pdf {}",
+             pdftotext -layout OCPP-2.1_edition2_part2_appendices_v21.pdf {}",
             source.display(),
             source.display()
         );
@@ -288,7 +288,23 @@ fn appendix_codegen(check: bool) -> Result<()> {
     let dir = root.join("src").join("standard");
     std::fs::create_dir_all(&dir)?;
     let mut changed = Vec::new();
-    for (name, contents) in appendix::emit(&parsed)? {
+    let mut files = appendix::emit(&parsed)?;
+    let whitepaper = appendix::whitepaper_path(&root);
+    match std::fs::read_to_string(&whitepaper) {
+        Ok(text) => {
+            let events = appendix::whitepaper_events(&text)?;
+            println!("parsed {} OCPP 1.6 security events", events.len());
+            files.insert(
+                "security_events_1_6.rs",
+                appendix::emit_whitepaper_events(&events),
+            );
+        }
+        Err(_) => println!(
+            "{} is absent; security_events_1_6.rs left as it is",
+            whitepaper.display()
+        ),
+    }
+    for (name, contents) in files {
         let path = dir.join(name);
         let formatted = rustfmt(&contents).with_context(|| format!("formatting {name}"))?;
         if std::fs::read_to_string(&path).unwrap_or_default() != formatted {
