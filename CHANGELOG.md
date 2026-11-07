@@ -43,8 +43,15 @@ A hard cut. Breaking changes are marked **Breaking** with what to do.
   the schema is fixed, a committed fuzz corpus with regression replay, a scheduled fuzz job, and
   synthesised field-quirk captures. `cargo xtask appendix` reads `OCPP_APPENDIX`.
 
+### Security
+
+- Updated `rustls` 0.23.46, `rustls-webpki` 0.103.16, `webpki-roots` 1.0.11, `tokio` 1.54.1,
+  `crypto-bigint` 0.7.10 and `ctutils` 0.4.8 for RUSTSEC-2026-0346, -0347, -0348, -0349, -0381,
+  -0382, -0385, -0386 and -0387.
+
 ### Changed
 
+- **Breaking:** MSRV 1.87 (was 1.85): every fixed `crypto-bigint` and `ctutils` release needs it.
 - **Breaking:** `Record::energy_wh() -> Option<Decimal>` is now
   `Record::energy() -> Option<RegisterDelta>`, which carries the signed records and spells its
   number `unverified_wh()`. Migrate: `record.energy().map(|e| e.unverified_wh())`.
