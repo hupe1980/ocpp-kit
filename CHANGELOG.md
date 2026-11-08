@@ -43,6 +43,9 @@ touch what the crate implements.
   are refused from a CSMS (K01.FR.62/64).
 - `DeviceModel::report_matching` and `ComponentKey::matches`: `GetReport` honours component
   instance, EVSE and connector (B08.FR.22–25).
+- `Engine::adopt_pending` queues what another process added to the engine's store since it
+  was built — in sequence order, never twice, within `max_queued`. `StationBuilder::store_poll`
+  does it on connect and every interval. `examples/sqlite_store.rs` asserts live delivery.
 
 ## [0.4.0] — 2026-11-07
 

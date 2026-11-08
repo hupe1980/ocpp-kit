@@ -1537,3 +1537,223 @@ fn a_triggered_answer_leaves_a_pending_station_but_an_untriggered_one_waits() {
 }
 
 const STATUS: &str = r#"{"timestamp":"2024-01-01T00:00:00Z","connectorStatus":"Available","evseId":1,"connectorId":1}"#;
+
+// --- Adopting what another process queued (`Engine::adopt_pending`) ---------------------
+
+/// One store, two handles: the engine's, and the "other process" that pushes into it.
+#[derive(Clone, Default)]
+struct SharedStore {
+    inner: std::rc::Rc<std::cell::RefCell<MemStore>>,
+    failing: std::rc::Rc<std::cell::Cell<bool>>,
+}
+
+impl MessageStore for SharedStore {
+    fn push(
+        &mut self,
+        entry: &ocpp_kit::engine::QueuedCall,
+    ) -> Result<ocpp_kit::engine::Seq, ocpp_kit::engine::StoreError> {
+        self.inner.borrow_mut().push(entry)
+    }
+    fn pending(
+        &self,
+    ) -> Result<
+        Vec<(ocpp_kit::engine::Seq, ocpp_kit::engine::QueuedCall)>,
+        ocpp_kit::engine::StoreError,
+    > {
+        if self.failing.get() {
+            return Err(ocpp_kit::engine::StoreError::new("disk gone"));
+        }
+        self.inner.borrow().pending()
+    }
+    fn ack(&mut self, seq: ocpp_kit::engine::Seq) -> Result<(), ocpp_kit::engine::StoreError> {
+        self.inner.borrow_mut().ack(seq)
+    }
+    fn set_attempts(
+        &mut self,
+        seq: ocpp_kit::engine::Seq,
+        attempts: u32,
+    ) -> Result<(), ocpp_kit::engine::StoreError> {
+        self.inner.borrow_mut().set_attempts(seq, attempts)
+    }
+    fn len(&self) -> Result<usize, ocpp_kit::engine::StoreError> {
+        self.inner.borrow().len()
+    }
+}
+
+impl SharedStore {
+    /// What the other process does: push a `TransactionEvent` with this `seqNo`.
+    fn push_tx(&self, seq_no: u32) {
+        self.inner
+            .borrow_mut()
+            .push(&ocpp_kit::engine::QueuedCall {
+                action: "TransactionEvent".into(),
+                payload: tx_payload(seq_no),
+                kind: MessageKind::Call,
+                attempts: 0,
+                transactional: true,
+            })
+            .unwrap();
+    }
+}
+
+/// An accepted 2.1 station over `store`, with nothing queued or in flight.
+fn shared_station(store: &SharedStore, max_queued: usize) -> Engine<SharedStore> {
+    let mut engine = Engine::with_store(
+        EngineConfig::new(Role::ChargingStation, Version::V2_1)
+            .with_heartbeat(HeartbeatPolicy::Manual)
+            .with_offline(OfflinePolicy {
+                queue_all_messages: false,
+                max_queued,
+            }),
+        store.clone(),
+    )
+    .unwrap();
+    engine.handle(
+        NOW,
+        Input::Connected {
+            version: Version::V2_1,
+        },
+    );
+    engine
+        .call(NOW, "BootNotification", raw(r#"{"reason":"PowerUp"}"#))
+        .unwrap();
+    let id = Recorder::new().drain(&mut engine).only_frame_id();
+    engine.handle(NOW, Input::Received(&format!(
+        r#"[3,"{id}",{{"currentTime":"2024-01-01T00:00:00Z","interval":0,"status":"Accepted"}}]"#
+    )));
+    let _ = engine.drain();
+    engine
+}
+
+fn seq_no(frame: &str) -> u64 {
+    let parts: Vec<serde_json::Value> = serde_json::from_str(frame).unwrap();
+    parts[3]["seqNo"].as_u64().unwrap()
+}
+
+fn answer(engine: &mut Engine<SharedStore>, frame: &str) {
+    let id = frame_id(frame);
+    engine.handle(NOW, Input::Received(&format!(r#"[3,"{id}",{{}}]"#)));
+}
+
+#[test]
+fn a_message_another_process_queued_is_adopted_and_sent_once() {
+    let store = SharedStore::default();
+    let mut engine = shared_station(&store, 16);
+    let mut recorder = Recorder::new();
+
+    store.push_tx(7);
+    assert_eq!(
+        recorder.drain(&mut engine).frames().len(),
+        0,
+        "not read unprompted"
+    );
+    assert_eq!(engine.adopt_pending(NOW).unwrap(), 1);
+    let frame = recorder.drain(&mut engine).only_frame().to_owned();
+    assert_eq!(seq_no(&frame), 7);
+
+    // In flight now: adopting again must not queue it a second time.
+    assert_eq!(engine.adopt_pending(NOW).unwrap(), 0);
+    assert_eq!(engine.queued(), 0);
+    answer(&mut engine, &frame);
+    assert_eq!(recorder.drain(&mut engine).frames().len(), 0);
+    assert_eq!(engine.adopt_pending(NOW).unwrap(), 0);
+    assert_eq!(store.len().unwrap(), 0, "acknowledged once, then gone");
+}
+
+#[test]
+fn an_adopted_message_goes_before_the_engines_own_later_ones() {
+    let store = SharedStore::default();
+    let mut engine = shared_station(&store, 16);
+    let mut recorder = Recorder::new();
+    engine.handle(NOW, Input::Disconnected);
+    let _ = engine.drain();
+
+    store.push_tx(1); // the other process, first
+    engine.call(NOW, "TransactionEvent", tx_payload(2)).unwrap(); // the engine, second
+    assert_eq!(engine.adopt_pending(NOW).unwrap(), 1);
+    assert_eq!(engine.queued(), 2);
+
+    engine.handle(
+        NOW,
+        Input::Connected {
+            version: Version::V2_1,
+        },
+    );
+    let first = recorder.drain(&mut engine).only_frame().to_owned();
+    assert_eq!(
+        seq_no(&first),
+        1,
+        "ordered by store sequence, not by adoption"
+    );
+    answer(&mut engine, &first);
+    let second = recorder.drain(&mut engine).only_frame().to_owned();
+    assert_eq!(seq_no(&second), 2);
+}
+
+#[test]
+fn adoption_obeys_the_queue_bound_and_leaves_the_rest_in_the_store() {
+    let store = SharedStore::default();
+    let mut engine = shared_station(&store, 2);
+    let mut recorder = Recorder::new();
+    engine.handle(NOW, Input::Disconnected);
+    let _ = engine.drain();
+
+    for n in 1..=3 {
+        store.push_tx(n);
+    }
+    assert_eq!(engine.adopt_pending(NOW).unwrap(), 2);
+    assert_eq!(engine.queued(), 2);
+    assert_eq!(
+        store.len().unwrap(),
+        3,
+        "the third waits in the store, not dropped"
+    );
+
+    engine.handle(
+        NOW,
+        Input::Connected {
+            version: Version::V2_1,
+        },
+    );
+    let first = recorder.drain(&mut engine).only_frame().to_owned();
+    answer(&mut engine, &first);
+    let _ = recorder.drain(&mut engine);
+    assert_eq!(
+        engine.adopt_pending(NOW).unwrap(),
+        1,
+        "room again, so the third comes in"
+    );
+}
+
+#[test]
+fn a_failing_store_is_an_error_and_leaves_the_queue_alone() {
+    let store = SharedStore::default();
+    let mut engine = shared_station(&store, 16);
+    engine.handle(NOW, Input::Disconnected);
+    let _ = engine.drain();
+    engine.call(NOW, "TransactionEvent", tx_payload(1)).unwrap();
+    store.push_tx(2);
+
+    store.failing.set(true);
+    assert!(engine.adopt_pending(NOW).is_err());
+    assert_eq!(engine.queued(), 1);
+    store.failing.set(false);
+    assert_eq!(engine.adopt_pending(NOW).unwrap(), 1);
+}
+
+#[test]
+fn nothing_is_adopted_while_a_shutdown_drains() {
+    let store = SharedStore::default();
+    let mut engine = shared_station(&store, 16);
+    engine.call(NOW, "TransactionEvent", tx_payload(1)).unwrap();
+    let _ = engine.drain(); // in flight, so the drain has something to wait for
+    engine.shutdown(NOW, Instant::from_millis(60_000));
+
+    store.push_tx(2);
+    assert_eq!(engine.adopt_pending(NOW).unwrap(), 0);
+    assert_eq!(
+        store.len().unwrap(),
+        2,
+        "it stays durable for the next start"
+    );
+}

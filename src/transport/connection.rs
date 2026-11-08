@@ -670,6 +670,8 @@ pub(crate) struct Driver<S: MessageStore> {
     slots: Arc<Semaphore>,
     /// The close frame the peer sent on the current connection, for `Event::Disconnected`.
     peer_close: Option<CloseFrame>,
+    /// How often to adopt what another process added to the store; `None` never.
+    pub store_poll: Option<Duration>,
 }
 
 /// How the driver watches for a connection that has died without saying so.
@@ -738,6 +740,17 @@ impl<S: MessageStore> Driver<S> {
             timers: BTreeMap::new(),
             slots: Arc::new(Semaphore::new(MAX_CONCURRENT_HANDLERS)),
             peer_close: None,
+            store_poll: None,
+        }
+    }
+
+    /// Queues what another process added to the store (`StationBuilder::store_poll`).
+    fn adopt_pending(&mut self) {
+        if let Err(error) = self.engine.adopt_pending(self.now()) {
+            let _ = self
+                .shared
+                .events
+                .send(Event::Violation(ProtocolViolation::StoreFailure { error }));
         }
     }
 
@@ -766,6 +779,9 @@ impl<S: MessageStore> Driver<S> {
         self.peer_close = None;
 
         self.engine.handle(self.now(), Input::Connected { version });
+        if self.store_poll.is_some() {
+            self.adopt_pending();
+        }
         self.publish(true, version);
         let _ = self.shared.events.send(Event::Connected {
             version,
@@ -774,6 +790,12 @@ impl<S: MessageStore> Driver<S> {
 
         let mut ping = keepalive.interval.map(|interval| {
             let mut timer = tokio::time::interval(interval);
+            timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            timer
+        });
+        let mut store_poll = self.store_poll.map(|interval| {
+            let mut timer =
+                tokio::time::interval_at(tokio::time::Instant::now() + interval, interval);
             timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             timer
         });
@@ -827,6 +849,12 @@ impl<S: MessageStore> Driver<S> {
                     if let Err(error) = sink.send(Message::Ping(Vec::new())).await {
                         break Ended::Disconnected(error.to_string());
                     }
+                }
+
+                _ = async { store_poll.as_mut().expect("checked").tick().await },
+                    if store_poll.is_some() =>
+                {
+                    self.adopt_pending();
                 }
 
                 // Part 4 §5.3: the ping is the end-to-end liveness check. A connection that
