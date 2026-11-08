@@ -156,12 +156,62 @@ impl ConfigurationKeys {
         if key.access == Access::ReadOnly || !key.value_type.accepts(value) {
             return ConfigurationStatus::Rejected;
         }
+        if name == "SecurityProfile" && !self.security_profile_change_allowed(value) {
+            return ConfigurationStatus::Rejected;
+        }
+        let Some(key) = self.keys.get_mut(name) else {
+            return ConfigurationStatus::NotSupported;
+        };
         key.value = Some(value.to_owned());
         if key.access == Access::RebootRequired {
             ConfigurationStatus::RebootRequired
         } else {
             ConfigurationStatus::Accepted
         }
+    }
+
+    /// The 1.6 Security Whitepaper (edition 4) A05 rules for `ChangeConfiguration` on
+    /// `SecurityProfile`. The Whitepaper numbers its requirements like 2.x Part 2 does but
+    /// independently, so they are written `A05 #01` here rather than as a 2.x id.
+    ///
+    /// * Only profiles 1–3 exist on the wire; profile 0 is a local choice, never one a Central
+    ///   System can make.
+    /// * Lowering it, or setting it to the current value above 1, is `Rejected`
+    ///   (Whitepaper A05 #01), except 3 → 2 while `AllowSecurityProfileDowngrade` is `true`
+    ///   (Whitepaper A05 #10). Lowering to 1 is never allowed (Whitepaper A00 #005).
+    /// * Raising it to 1 or 2 needs an `AuthorizationKey` (Whitepaper A05 #02). The
+    ///   certificate prerequisites of Whitepaper A05 #03/#04 are the certificate store's to
+    ///   check, before this.
+    fn security_profile_change_allowed(&self, value: &str) -> bool {
+        let Ok(requested) = value.trim().parse::<u8>() else {
+            return false;
+        };
+        if !(1..=3).contains(&requested) {
+            return false;
+        }
+        let current = self
+            .keys
+            .get("SecurityProfile")
+            .and_then(|key| key.value.as_deref())
+            .and_then(|value| value.trim().parse::<u8>().ok())
+            .unwrap_or(1);
+        if requested > current {
+            let has_key = self
+                .keys
+                .get("AuthorizationKey")
+                .and_then(|key| key.value.as_deref())
+                .is_some_and(|key| !key.is_empty());
+            return requested == 3 || has_key;
+        }
+        if requested == current {
+            return requested == 1;
+        }
+        let downgrade_allowed = self
+            .keys
+            .get("AllowSecurityProfileDowngrade")
+            .and_then(|key| key.value.as_deref())
+            .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+        current == 3 && requested == 2 && downgrade_allowed
     }
 
     /// Answers a `GetConfiguration`.
@@ -381,10 +431,20 @@ fn defaults() -> Vec<Key> {
             ),
             "10"
         ),
-        // --- Security (Whitepaper edition 2) ---------------------------------
+        // --- Security (Whitepaper edition 4) ---------------------------------
         // Write-only in the specification: the key is set, never read back.
         key("AuthorizationKey", ReadWrite, Text, "Security"),
         with(key("SecurityProfile", ReadWrite, Integer, "Security"), "1"),
+        // Edition 4 §7.8: 3 → 2 only while this is true; never down to 1.
+        with(
+            key(
+                "AllowSecurityProfileDowngrade",
+                ReadWrite,
+                Boolean,
+                "Security"
+            ),
+            "false"
+        ),
         with(
             key(
                 "AdditionalRootCertificateCheck",
@@ -416,6 +476,38 @@ fn defaults() -> Vec<Key> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 1.6 Security Whitepaper edition 4, A05: up with prerequisites, down only 3 → 2 when
+    /// allowed, never to 1.
+    #[test]
+    fn the_security_profile_is_never_lowered_except_three_to_two_when_allowed() {
+        use ConfigurationStatus::{Accepted, Rejected};
+        let mut config = ConfigurationKeys::with_defaults();
+        // Whitepaper A05 #02: profile 2 needs an AuthorizationKey.
+        assert_eq!(config.set("SecurityProfile", "2"), Rejected);
+        assert_eq!(
+            config.set("AuthorizationKey", "00112233445566778899aabbccddeeff"),
+            Accepted
+        );
+        assert_eq!(config.set("SecurityProfile", "2"), Accepted);
+        // Whitepaper A05 #01: equal or lower is refused; Whitepaper A00 #005: never back to 1.
+        assert_eq!(config.set("SecurityProfile", "2"), Rejected);
+        assert_eq!(config.set("SecurityProfile", "1"), Rejected);
+        assert_eq!(config.set("SecurityProfile", "0"), Rejected);
+        assert_eq!(config.set("SecurityProfile", "3"), Accepted);
+        // Whitepaper A05 #10: 3 → 2 only with AllowSecurityProfileDowngrade.
+        assert_eq!(config.set("SecurityProfile", "2"), Rejected);
+        assert_eq!(
+            config.set("AllowSecurityProfileDowngrade", "true"),
+            Accepted
+        );
+        assert_eq!(config.set("SecurityProfile", "1"), Rejected);
+        assert_eq!(config.set("SecurityProfile", "2"), Accepted);
+        assert_eq!(
+            config.get("SecurityProfile").unwrap().value.as_deref(),
+            Some("2")
+        );
+    }
 
     #[test]
     fn writes_are_checked_against_the_keys_type_and_access() {

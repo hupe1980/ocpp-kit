@@ -6,8 +6,43 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+Behaviour now follows OCPP 2.0.1 Edition 4, 2.1 Edition 2 (errata 2026-09 included) and the
+1.6 Security Whitepaper Edition 4. No schema changed; these are the requirement changes that
+touch what the crate implements.
+
+### Changed
+
+- **Breaking:** 2.0.1 ignores an unknown message type, as 1.6J and 2.1 do (2.0.1 errata
+  2026-02: Part 4 §4.4 removed, `MessageTypeNotSupported` deprecated). Nothing to migrate
+  unless a test expected the `CALLERROR`.
+- **Breaking:** `smart_charging::Supply` has no `phases`; a period without `numberPhases`
+  converts as three phases (K01.FR.49). Build it with `Supply::new(voltage)`; a single-phase
+  site sends `numberPhases = 1`.
+- **Breaking:** `BasicAuthPassword::hex` (1.6 `AuthorizationKey`) requires 16–20 bytes
+  (Whitepaper A00.FR.205), failing with `CredentialError::KeyLength`.
+- **Breaking:** the 1.6 `SecurityProfile` key refuses being lowered or re-set, except 3 → 2
+  while the new `AllowSecurityProfileDowngrade` key is `true`, and refuses 1 or 2 without an
+  `AuthorizationKey` (Whitepaper A05).
+- `DataSigned` in `TxStopPoint` no longer ends a transaction (its stop requirement removed).
+- The composite schedule reports the lowest `numberPhases` of the applicable periods
+  (K01.FR.140).
+- A network profile without its own password uses the station's `.password()` (B09.FR.16)
+  instead of failing `build()`.
+- `src/standard` catalogues regenerated from Appendices v2.1: new variables and reason codes;
+  `DisplayMessageCtrlr.PersonalMessageSize` is gone.
+
 ### Added
 
+- `Engine::require_boot`: re-opens the boot gate. The Tokio station calls it after
+  connecting over a different configuration slot (B10.FR.10).
+- `AuthorizationPolicy::local_list_supports_expiry` (`LocalAuthListCtrlr.SupportsExpiryDateTime`,
+  C13/C14); the default `true` keeps honouring list expiry.
+- `TransactionMachine::stop_locally`: an EV driver's stop at the station, `Local` /
+  `StopAuthorized` (E07.FR.05).
+- `Purpose::settable_by_csms`: `ChargingStationExternalConstraints` and `LocalGeneration`
+  are refused from a CSMS (K01.FR.62/64).
+- `DeviceModel::report_matching` and `ComponentKey::matches`: `GetReport` honours component
+  instance, EVSE and connector (B08.FR.22–25).
 - `Engine::adopt_pending` queues what another process added to the engine's store since it
   was built — in sequence order, never twice, within `max_queued`. `StationBuilder::store_poll`
   does it on connect and every interval. `examples/sqlite_store.rs` asserts live delivery.

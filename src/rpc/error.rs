@@ -17,7 +17,7 @@ use crate::version::Version;
 /// | [`FormatViolation`](Self::FormatViolation) | `FormationViolation` | `FormatViolation` |
 /// | [`OccurrenceConstraintViolation`](Self::OccurrenceConstraintViolation) | `OccurenceConstraintViolation` (one `r`, as printed in the specification) | `OccurrenceConstraintViolation` |
 /// | [`RpcFrameworkError`](Self::RpcFrameworkError) | not defined — sent as `GenericError` | `RpcFrameworkError` |
-/// | [`MessageTypeNotSupported`](Self::MessageTypeNotSupported) | not defined — sent as `GenericError` | `MessageTypeNotSupported` |
+/// | [`MessageTypeNotSupported`](Self::MessageTypeNotSupported) | not defined — sent as `GenericError` | `MessageTypeNotSupported` (deprecated; never sent) |
 ///
 /// Parsing accepts every spelling on every version, because peers mix them up constantly.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -30,6 +30,10 @@ pub enum ErrorCode {
     /// The receiver failed internally while processing the action.
     InternalError,
     /// A message type number the receiver does not support (2.x only).
+    ///
+    /// Deprecated by the 2.0.1 edition 4 errata (2026-02): an unknown message type is
+    /// ignored on every version, so this engine never sends it. Still parsed, because older
+    /// 2.0.1 peers do.
     MessageTypeNotSupported,
     /// The requested action is not known to the receiver.
     NotImplemented,

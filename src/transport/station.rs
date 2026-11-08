@@ -110,7 +110,9 @@ impl<S: MessageStore + Send + 'static> StationBuilder<S> {
         self
     }
 
-    /// The HTTP Basic password, for profiles 1 and 2.
+    /// The HTTP Basic password, for profiles 1 and 2. With
+    /// [`network_profiles`](Self::network_profiles), it is the password of every profile that
+    /// does not set its own (B09.FR.16).
     #[must_use]
     pub fn password(mut self, password: BasicAuthPassword) -> Self {
         self.password = Some(password);
@@ -263,7 +265,13 @@ impl<S: MessageStore + Send + 'static> StationBuilder<S> {
 
         // A station configured with a single URL is just a one-slot network configuration, so
         // there is one code path for both.
-        let profiles = if let Some(profiles) = self.profiles {
+        let profiles = if let Some(mut profiles) = self.profiles {
+            // B09.FR.16 (2.1): a profile that sets no BasicAuthPassword of its own uses the
+            // station's (`SecurityCtrlr.BasicAuthPassword`); one that sets it uses its own
+            // (B09.FR.18). 2.0.1 does not say, and failing the build is no better a reading.
+            if let Some(password) = &self.password {
+                profiles.default_password(password);
+            }
             profiles
         } else {
             {
@@ -431,6 +439,8 @@ impl<S: MessageStore + Send + 'static> Station<S> {
             let mut attempt = 0u32;
             let mut cycler = ProfileCycler::new(&connector.profiles);
             let mut announced = None;
+            // The slot the last session ran on: B10.FR.10 re-boots after a switch.
+            let mut last_connected: Option<i32> = None;
 
             loop {
                 let (profile, _) = connector.profile_at(cycler.index());
@@ -452,6 +462,13 @@ impl<S: MessageStore + Send + 'static> Station<S> {
                     Ok((socket, version)) => {
                         attempt = 0;
                         cycler.succeeded();
+                        // B10.FR.10: connected after switching NetworkConnectionProfile, so
+                        // register again even without a reboot.
+                        if last_connected.is_some_and(|previous| previous != slot) {
+                            let now = driver.now();
+                            driver.engine.require_boot(now);
+                        }
+                        last_connected = Some(slot);
                         driver
                             .engine
                             .set_call_timeout(message_timeout.unwrap_or(default_call_timeout));
@@ -766,6 +783,39 @@ mod tests {
             .err()
             .expect("profile 1 needs a password");
         assert!(error.to_string().contains("needs a password"), "{error}");
+    }
+
+    /// B09.FR.16: a profile without its own password uses the station's; B09.FR.18: one
+    /// with its own keeps it.
+    #[test]
+    fn a_profile_without_a_password_uses_the_stations() {
+        use super::super::network_profile::{NetworkProfile, NetworkProfiles};
+
+        let own = BasicAuthPassword::utf8("ffffffffffffffff").unwrap();
+        let station = Station::builder()
+            .identity("CS-0001")
+            .unwrap()
+            .password(BasicAuthPassword::utf8("0123456789abcdef").unwrap())
+            .network_profiles(NetworkProfiles::new([
+                NetworkProfile::new(0, "ws://fallback/ocpp")
+                    .security_profile(SecurityProfile::BasicAuth),
+                NetworkProfile::new(1, "ws://primary/ocpp")
+                    .security_profile(SecurityProfile::BasicAuth)
+                    .password(own.clone()),
+            ]))
+            .build()
+            .expect("slot 0 falls back to the station password");
+        let profiles = &station.connector.profiles;
+        assert!(profiles.get(0).unwrap().password.is_some());
+        assert_eq!(
+            profiles
+                .get(1)
+                .unwrap()
+                .password
+                .as_ref()
+                .map(BasicAuthPassword::as_bytes),
+            Some(own.as_bytes())
+        );
     }
 
     #[test]

@@ -14,7 +14,7 @@ of them. This page is the list, with where each one lives in the code.
 |---|---|---|---|---|
 | Subprotocol | `ocpp1.6` | `ocpp2.0.1` | `ocpp2.1` | `Version::subprotocol` |
 | Message types | 2, 3, 4 | 2, 3, 4 | + 5 `CALLRESULTERROR`, 6 `SEND` | `MessageTypeId::is_defined_in` |
-| Unknown message type number | ignore the payload (§4.1.3) | answer `MessageTypeNotSupported` (§4.4) | ignore the payload (§4.4) | `FrameError::is_ignorable` |
+| Unknown message type number | ignore the message (§4.1.3) | ignore the message (§4.1; §4.4's answer removed by the edition 4 errata) | ignore the message (§4.1) | `FrameError::is_ignorable` |
 | Unreadable `MessageId` | no rule | answer with id `"-1"` | answer with id `"-1"` | `MessageId::unreadable` |
 | One outstanding `CALL` | `SHOULD NOT` | `SHALL NOT` | `SHALL NOT` | `InboundConcurrency` |
 | `SEND` exempt from that rule | – | – | yes (§4.2.4) | `Engine::pump` |
@@ -29,7 +29,7 @@ message type, and 2.1 changed it back to silence.
 | Payload syntactically incorrect | `FormationViolation` | `FormatViolation` |
 | Occurrence constraint violated | `OccurenceConstraintViolation` *(one `r`, as printed)* | `OccurrenceConstraintViolation` |
 | Not a valid RPC request | *(not defined)* → `GenericError` | `RpcFrameworkError` |
-| Unsupported message type number | *(not defined)* → `GenericError` | `MessageTypeNotSupported` |
+| Unsupported message type number | *(not defined)* → `GenericError` | `MessageTypeNotSupported` (deprecated; never sent, still parsed) |
 
 `ErrorCode::as_wire(version)` produces the right spelling; `ErrorCode::parse` accepts every
 spelling on every version, because peers mix them up.

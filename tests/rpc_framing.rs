@@ -61,13 +61,13 @@ fn send_and_call_result_error_are_21_only() {
 }
 
 #[test]
-fn unknown_message_type_is_ignored_on_16_and_21_but_answered_on_201() {
+fn unknown_message_type_is_ignored_on_every_version() {
     let text = r#"[7,"1","Whatever",{}]"#;
     for version in [Version::V1_6, Version::V2_0_1, Version::V2_1] {
         let error = Frame::parse(text, version).unwrap_err();
         assert!(matches!(error, FrameError::UnknownMessageType { .. }));
-        // Part 4 §4.4 changed between 2.0.1 and 2.1.
-        assert_eq!(error.is_ignorable(version), version != Version::V2_0_1);
+        // 2.0.1 answered it under §4.4 until the edition 4 errata removed that section.
+        assert!(error.is_ignorable(version));
         assert_eq!(error.error_code(), ErrorCode::MessageTypeNotSupported);
     }
 }

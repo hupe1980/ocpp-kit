@@ -38,8 +38,9 @@ pub use local_controller::{
 };
 pub use network_profile::{NetworkProfile, NetworkProfiles};
 pub use security::{
-    BASIC_AUTH_INTEROPERABLE_MAX_LEN, BASIC_AUTH_MAX_LEN, BASIC_AUTH_MIN_LEN, BasicAuthPassword,
-    CredentialError, Credentials, SecurityProfile, basic_auth_header, constant_time_eq,
+    AUTHORIZATION_KEY_MAX_BYTES, AUTHORIZATION_KEY_MIN_BYTES, BASIC_AUTH_INTEROPERABLE_MAX_LEN,
+    BASIC_AUTH_MAX_LEN, BASIC_AUTH_MIN_LEN, BasicAuthPassword, CredentialError, Credentials,
+    SecurityProfile, basic_auth_header, constant_time_eq,
 };
 pub use station::{Station, StationBuilder};
 pub use stream::MaybeTls;

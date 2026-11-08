@@ -7,7 +7,7 @@
 //! ids mechanical:
 //!
 //! ```text
-//! pdftotext -layout OCPP-2.0.1_part2_specification_edition2.pdf part2-2.0.1.txt
+//! pdftotext -layout OCPP-2.0.1_edition4_part2_specification.pdf part2-2.0.1.txt
 //! OCPP_PART2_2_0_1=part2-2.0.1.txt cargo xtask requirements
 //! ```
 //!
@@ -47,8 +47,12 @@ impl Edition {
     /// The edition the text rendering is of, as `SPEC_EDITIONS.md` records it.
     fn edition_note(self) -> &'static str {
         match self {
-            Self::V2_0_1 => "OCPP 2.0.1 Edition 2 Part 2 - Specification (FINAL, 2022-12-15)",
-            Self::V2_1 => "OCPP 2.1 Edition 1 Part 2 - Specification (2025-01-23)",
+            Self::V2_0_1 => {
+                "OCPP 2.0.1 Edition 4 Part 2 - Specification (2025-12-03) and its errata 2026-09"
+            }
+            Self::V2_1 => {
+                "OCPP 2.1 Edition 2 Part 2 - Specification (2025-12-03) and its errata 2026-09"
+            }
         }
     }
 
@@ -76,10 +80,33 @@ impl Edition {
                 match self {
                     Self::V2_0_1 => reference
                         .join("ocpp-2.0.1")
-                        .join("OCPP-2.0.1_part2_specification_edition2.txt"),
+                        .join("OCPP-2.0.1_edition4_part2_specification.txt"),
                     Self::V2_1 => reference
                         .join("ocpp-2.1")
-                        .join("OCPP-2.1_edition1_part2_specification.txt"),
+                        .join("OCPP-2.1_edition2_part2_specification.txt"),
+                }
+            },
+            PathBuf::from,
+        )
+    }
+
+    /// The errata sheet against that edition, whose new requirements Part 2 does not yet
+    /// contain: `OCPP_ERRATA_2_0_1` / `OCPP_ERRATA_2_1`, else the local corpus. Optional.
+    pub fn errata_path(self, root: &Path) -> PathBuf {
+        let var = match self {
+            Self::V2_0_1 => "OCPP_ERRATA_2_0_1",
+            Self::V2_1 => "OCPP_ERRATA_2_1",
+        };
+        std::env::var_os(var).map_or_else(
+            || {
+                let reference = root.join("concepts").join("reference");
+                match self {
+                    Self::V2_0_1 => reference
+                        .join("ocpp-2.0.1")
+                        .join("OCPP-2.0.1_edition4_errata_2026-09.txt"),
+                    Self::V2_1 => reference
+                        .join("ocpp-2.1")
+                        .join("OCPP-2.1_edition2_errata_2026-09.txt"),
                 }
             },
             PathBuf::from,
@@ -88,8 +115,8 @@ impl Edition {
 
     fn pdf_name(self) -> &'static str {
         match self {
-            Self::V2_0_1 => "OCPP-2.0.1_part2_specification_edition2.pdf",
-            Self::V2_1 => "OCPP-2.1_edition1_part2_specification.pdf",
+            Self::V2_0_1 => "OCPP-2.0.1_edition4_part2_specification.pdf",
+            Self::V2_1 => "OCPP-2.1_edition2_part2_specification.pdf",
         }
     }
 
@@ -428,6 +455,25 @@ pub fn parse(text: &str) -> (Requirements, Findings) {
     (requirements, findings)
 }
 
+/// Adds the ids `extra` has and `base` lacks, keeping `base`'s titles. Returns how many.
+fn merge(base: &mut Requirements, extra: Requirements) -> usize {
+    let mut added = 0;
+    for (key, use_case) in extra.use_cases {
+        let target = base.use_cases.entry(key).or_default();
+        for id in use_case.ids {
+            if !target.ids.contains(&id) {
+                target.ids.push(id);
+                added += 1;
+            }
+        }
+        target.ids.sort_by_key(|id| id_order(id));
+        if target.title.is_empty() {
+            target.title = use_case.title;
+        }
+    }
+    added
+}
+
 /// Fails when the extraction is implausible: too few ids, a known id missing, a use case
 /// without a title.
 pub fn validate(edition: Edition, requirements: &Requirements) -> Result<()> {
@@ -580,7 +626,18 @@ pub fn run(root: &Path, check: bool) -> Result<()> {
         }
         let text = std::fs::read_to_string(&source)
             .with_context(|| format!("reading {}", source.display()))?;
-        let (requirements, findings) = parse(&text);
+        let (mut requirements, findings) = parse(&text);
+        // An erratum that adds a requirement (K01.FR.62, B12.FR.11, …) states it in a table of
+        // the same shape; its ids are as citable as Part 2's.
+        let errata = edition.errata_path(root);
+        if let Ok(errata_text) = std::fs::read_to_string(&errata) {
+            let (added, _) = parse(&errata_text);
+            let count = merge(&mut requirements, added);
+            println!(
+                "{}: {count} requirement id(s) added by the errata",
+                edition.label()
+            );
+        }
         validate(edition, &requirements)?;
         report(edition, &requirements, &findings);
 

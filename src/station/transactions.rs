@@ -3,7 +3,8 @@
 //! What starts and stops a transaction in 2.x is not a message but a *condition*.
 //! `TxCtrlr.TxStartPoint` and `TxCtrlr.TxStopPoint` each name a **set** of conditions, and the
 //! specification writes one independent `SHALL` per member — six for starting (E01.FR.01–06),
-//! seven for stopping (E06.FR.01–07).
+//! six for stopping (E06.FR.01–07 less the `DataSigned` one: 2.0.1 edition 4 and 2.1 edition 2 removed
+//! `DataSigned` as a stop point — it "has no meaning as a `TxStopPoint`").
 //!
 //! The set is therefore a **disjunction**: the *first* configured condition to arrive starts
 //! the transaction, and the *first* to disappear ends it. That is what makes the
@@ -390,10 +391,13 @@ impl TransactionMachine {
                 }
             }
             Some(active) => {
+                // `DataSigned` is ignored as a stop point (the edition 2 stop requirement for it is gone): a meter that stops
+                // signing is not the end of a session.
                 let stopped = self
                     .stop_points
                     .iter()
                     .copied()
+                    .filter(|point| *point != TxPoint::DataSigned)
                     .find(|point| previous.holds(*point) && !conditions.holds(*point));
                 if let Some(point) = stopped {
                     let seq_no = active.next_seq;
@@ -433,6 +437,23 @@ impl TransactionMachine {
             transaction_id: active.id.clone(),
             seq_no,
             trigger,
+            timestamp: now,
+        })
+    }
+
+    /// Ends the transaction because the EV driver asked to at the station — presented the
+    /// token again, or pressed a stop button that is not the emergency stop.
+    ///
+    /// E07.FR.05 (edition 4 wording): "the Charging Station SHOULD use a stoppedReason =
+    /// Local", with trigger `StopAuthorized`. `DeAuthorized` is for the CSMS revoking the
+    /// authorization (E07.FR.06), which is what a falling `authorized` condition reports.
+    pub fn stop_locally(&mut self, now: DateTime) -> Option<TxEvent> {
+        let active = self.active.take()?;
+        Some(TxEvent::Ended {
+            transaction_id: active.id,
+            seq_no: active.next_seq,
+            trigger: "StopAuthorized",
+            stopped_reason: "Local",
             timestamp: now,
         })
     }
@@ -596,6 +617,66 @@ mod tests {
             ),
             "{events:?}"
         );
+    }
+
+    /// E07.FR.05: the driver's own stop is `Local`, triggered by `StopAuthorized`.
+    #[test]
+    fn a_drivers_stop_at_the_station_is_local_e07_fr_05() {
+        let mut machine = machine();
+        let charging = Conditions {
+            ev_connected: true,
+            authorized: true,
+            ..Conditions::default()
+        };
+        let _ = machine.observe(charging, now());
+        assert!(matches!(
+            machine.stop_locally(now()),
+            Some(TxEvent::Ended {
+                trigger: "StopAuthorized",
+                stopped_reason: "Local",
+                ..
+            })
+        ));
+        assert!(
+            machine.stop_locally(now()).is_none(),
+            "nothing left to stop"
+        );
+    }
+
+    /// 2.0.1 edition 4 / 2.1 edition 2 dropped the `DataSigned` stop requirement: in `TxStopPoint` it ends
+    /// nothing. It still starts a transaction (E01.FR.04).
+    #[test]
+    fn data_signed_is_not_a_stop_point() {
+        let mut machine = TransactionMachine::new(
+            points(&[TxPoint::DataSigned]),
+            points(&[TxPoint::DataSigned, TxPoint::EVConnected]),
+            Box::new(CounterTransactionIds::new("tx-")),
+        );
+        let signed = Conditions {
+            ev_connected: true,
+            data_signed: true,
+            ..Conditions::default()
+        };
+        assert!(matches!(
+            machine.observe(signed, now())[0],
+            TxEvent::Started { .. }
+        ));
+        let unsigned = Conditions {
+            data_signed: false,
+            ..signed
+        };
+        assert!(matches!(
+            machine.observe(unsigned, now())[0],
+            TxEvent::Updated { .. }
+        ));
+        let unplugged = Conditions::default();
+        assert!(matches!(
+            machine.observe(unplugged, now())[0],
+            TxEvent::Ended {
+                stopped_reason: "EVDisconnected",
+                ..
+            }
+        ));
     }
 
     /// E01.FR.05 defines `PowerPathClosed` as *authorized AND connected to the EV*, and

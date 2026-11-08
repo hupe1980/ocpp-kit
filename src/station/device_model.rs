@@ -232,6 +232,27 @@ impl ComponentKey {
     }
 }
 
+impl ComponentKey {
+    /// Whether this component answers a `GetReport` `componentVariable.component` criterion.
+    ///
+    /// B08.FR.22–25 (2.0.1 edition 4): the name must match; each of instance, EVSE and
+    /// connector narrows the match only when the request gives it — no `evse.id` is every EVSE
+    /// and the station level (B08.FR.23), an `evse.id` without a connector is every connector
+    /// of that EVSE (B08.FR.22), and no instance is every instance or none (B08.FR.25).
+    #[must_use]
+    pub fn matches(&self, criterion: &ComponentKey) -> bool {
+        self.name == criterion.name
+            && criterion
+                .instance
+                .as_ref()
+                .is_none_or(|instance| self.instance.as_ref() == Some(instance))
+            && criterion.evse.is_none_or(|evse| self.evse == Some(evse))
+            && criterion
+                .connector
+                .is_none_or(|connector| self.connector == Some(connector))
+    }
+}
+
 impl From<&str> for ComponentKey {
     fn from(name: &str) -> Self {
         ComponentKey::new(name)
@@ -732,9 +753,23 @@ impl DeviceModel {
         component_filter: Option<&str>,
         variable_filter: Option<&str>,
     ) -> Vec<ReportDatum> {
+        let criterion = component_filter.map(ComponentKey::new);
+        self.report_matching(base, criterion.as_ref(), variable_filter)
+    }
+
+    /// As [`report`](Self::report), with a full `component` criterion: instance, EVSE and
+    /// connector narrow the match where the `GetReportRequest` gives them
+    /// ([`ComponentKey::matches`], B08.FR.22–25).
+    #[must_use]
+    pub fn report_matching(
+        &self,
+        base: ReportBase,
+        component_filter: Option<&ComponentKey>,
+        variable_filter: Option<&str>,
+    ) -> Vec<ReportDatum> {
         let mut out = Vec::new();
         for (component, variables) in &self.components {
-            if component_filter.is_some_and(|name| name != component.name) {
+            if component_filter.is_some_and(|criterion| !component.matches(criterion)) {
                 continue;
             }
             for (variable, spec) in variables {
@@ -1160,6 +1195,29 @@ mod tests {
             report[0].attributes[0].2, None,
             "the value is withheld from reports too"
         );
+    }
+
+    /// B08.FR.22–25: instance, EVSE and connector narrow a `GetReport` only when given.
+    #[test]
+    fn a_report_criterion_matches_instance_evse_and_connector_where_given() {
+        let station = ComponentKey::new("Connector");
+        let evse1 = ComponentKey::new("Connector").evse(1, Some(1));
+        let evse2 = ComponentKey::new("Connector").evse(2, Some(1));
+        let named = ComponentKey::new("Connector")
+            .instance("A")
+            .evse(1, Some(2));
+
+        let any = ComponentKey::new("Connector");
+        assert!(station.matches(&any) && evse1.matches(&any) && named.matches(&any)); // FR.23/25
+
+        let on_evse1 = ComponentKey::new("Connector").evse(1, None); // FR.22
+        assert!(evse1.matches(&on_evse1) && named.matches(&on_evse1));
+        assert!(!evse2.matches(&on_evse1) && !station.matches(&on_evse1));
+
+        let instance_a = ComponentKey::new("Connector").instance("A"); // FR.24
+        assert!(named.matches(&instance_a) && !evse1.matches(&instance_a));
+
+        assert!(!ComponentKey::new("EVSE").matches(&any));
     }
 
     #[test]

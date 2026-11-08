@@ -754,7 +754,7 @@ impl<S: MessageStore> Driver<S> {
         }
     }
 
-    fn now(&self) -> Instant {
+    pub(crate) fn now(&self) -> Instant {
         Instant::from_millis(u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX))
     }
 

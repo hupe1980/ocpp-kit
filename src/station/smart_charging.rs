@@ -80,6 +80,24 @@ pub enum Purpose {
     LocalGeneration,
 }
 
+impl Purpose {
+    /// Whether a CSMS may install a profile of this purpose with `SetChargingProfile`.
+    ///
+    /// No for `ChargingStationExternalConstraints` (K01.FR.62, 2.0.1 edition 4 and 2.1
+    /// edition 2 errata) and `LocalGeneration` (K01.FR.64, 2.1): both are set locally — by an
+    /// energy manager or the station's own metering — and a `SetChargingProfileRequest`
+    /// carrying one is answered `Rejected` with `reasonCode` `UnsupportedPurpose`.
+    /// [`ProfileStore::install`] accepts every purpose, because the local sources need it to;
+    /// a `SetChargingProfile` handler checks this first.
+    #[must_use]
+    pub const fn settable_by_csms(self) -> bool {
+        !matches!(
+            self,
+            Purpose::ChargingStationExternalConstraints | Purpose::LocalGeneration
+        )
+    }
+}
+
 /// How a profile's schedule is anchored in time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -328,26 +346,37 @@ impl Profile {
     }
 }
 
+/// The phase count assumed for a period without `numberPhases`.
+///
+/// K01.FR.49: "The Charging Station SHALL assume numberPhases = 3 as a default value", with
+/// the edition 4 note that "regions with a single phase network should always provide
+/// numberPhases = 1, otherwise 3 phases will be assumed". It is the CSMS's to say, not the
+/// station's to configure.
+pub const DEFAULT_PHASES: i32 = 3;
+
 /// The supply parameters needed to convert between amperes and watts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Supply {
-    /// Nominal line voltage, in volts.
+    /// Nominal line voltage, in volts: "not the measured voltage, but the set voltage for the
+    /// area (for example, 230 or 110 V)" (K01.FR.50).
     pub voltage: Decimal,
-    /// The number of phases available.
-    pub phases: i32,
 }
 
 impl Default for Supply {
-    /// 230 V, three phases — the European default.
+    /// 230 V — the European default.
     fn default() -> Self {
-        Self {
-            voltage: Decimal::from(230),
-            phases: 3,
-        }
+        Self::new(Decimal::from(230))
     }
 }
 
 impl Supply {
+    /// A supply at the given nominal voltage.
+    #[must_use]
+    pub const fn new(voltage: Decimal) -> Self {
+        Self { voltage }
+    }
+
     /// Converts a limit into `to`.
     ///
     /// Amperes to watts is exact. Watts to amperes is a division, so it is rounded to
@@ -368,7 +397,9 @@ impl Supply {
         if from == to {
             return Some(limit);
         }
-        let phases = Decimal::from(phases.unwrap_or(self.phases).max(1));
+        // K01.FR.50: "Current per phase = limit / (Line Voltage * numberPhases)", with
+        // numberPhases from the period, or 3 when it has none (K01.FR.49).
+        let phases = Decimal::from(phases.unwrap_or(DEFAULT_PHASES).max(1));
         let factor = self.voltage.checked_mul(phases)?;
         match (from, to) {
             (RateUnit::A, RateUnit::W) => limit.checked_mul(factor),
@@ -392,7 +423,8 @@ pub struct CompositePeriod {
     /// schemas, so a caller answering `GetCompositeSchedule` substitutes the EVSE's rated
     /// maximum here; see [`CompositeSchedule::fill_gaps`].
     pub limit: Option<Decimal>,
-    /// The phase count the winning profile asked for.
+    /// The lowest phase count any applicable period asked for (K01.FR.140); `None` when none
+    /// said, which means [`DEFAULT_PHASES`].
     pub number_phases: Option<i32>,
 }
 
@@ -456,7 +488,9 @@ impl ProfileStore {
 
     /// Installs a profile, replacing any profile with the same id.
     ///
-    /// K01: a `SetChargingProfile` with an id that already exists replaces it.
+    /// K01: a `SetChargingProfile` with an id that already exists replaces it. Every purpose
+    /// is accepted; for one that came from the CSMS, check [`Purpose::settable_by_csms`]
+    /// first (K01.FR.62/64).
     pub fn install(&mut self, profile: Profile) {
         self.profiles.retain(|existing| existing.id != profile.id);
         self.profiles.push(profile);
@@ -686,7 +720,21 @@ impl ProfileStore {
         // for the EVSE, then this capacity is **added on top** of the calculated composite
         // schedule." It is generation, not a constraint — taking the minimum with it would
         // turn a solar array into a limit.
-        if let Some((generation, phases)) = leading(Purpose::LocalGeneration) {
+        let generation = leading(Purpose::LocalGeneration);
+        // K01.FR.140 (2.1 edition 2): "at each point in time use the lowest value of
+        // numberPhases for that point in time in all applicable chargingSchedulePeriods" — a
+        // station maximum of one phase and a TxProfile of three is one phase. 2.0.1 does not
+        // say; the lowest is the reading that never exceeds a profile.
+        let lowest_phases = [
+            Purpose::ChargingStationMaxProfile,
+            Purpose::ChargingStationExternalConstraints,
+        ]
+        .into_iter()
+        .filter_map(|purpose| leading(purpose).and_then(|(_, phases)| phases))
+        .chain(session.and_then(|(_, phases)| phases))
+        .chain(generation.and_then(|(_, phases)| phases))
+        .min();
+        if let Some((generation, phases)) = generation {
             effective = match effective {
                 // The sum overflows only past 19 digits, at which point the honest answer is
                 // the constraint that was already there rather than a wrapped one.
@@ -698,7 +746,7 @@ impl ProfileStore {
             };
         }
 
-        effective
+        effective.map(|(limit, _)| (limit, lowest_phases))
     }
 }
 
@@ -733,6 +781,77 @@ mod tests {
                 .map(|(start, limit)| Period::new(*start, *limit))
                 .collect(),
         )
+    }
+
+    /// K01.FR.62/64: two purposes are the station's own to set.
+    #[test]
+    fn external_constraints_and_local_generation_are_not_the_csmss_to_set() {
+        assert!(!Purpose::ChargingStationExternalConstraints.settable_by_csms());
+        assert!(!Purpose::LocalGeneration.settable_by_csms());
+        for purpose in [
+            Purpose::ChargingStationMaxProfile,
+            Purpose::TxDefaultProfile,
+            Purpose::TxProfile,
+            Purpose::PriorityCharging,
+        ] {
+            assert!(purpose.settable_by_csms(), "{purpose:?}");
+        }
+    }
+
+    /// K01.FR.140: the composite's phase count is the lowest any applicable period asks for,
+    /// not the winning limit's — a one-phase station maximum keeps a three-phase `TxProfile`
+    /// on one phase even where the `TxProfile` limit is the lower.
+    #[test]
+    fn the_composite_uses_the_lowest_phase_count_k01_fr_140() {
+        let start = at("2024-01-01T00:00:00Z");
+        let mut store = ProfileStore::new();
+        store.install(Profile::new(
+            1,
+            0,
+            Purpose::ChargingStationMaxProfile,
+            ProfileKind::Absolute,
+            Schedule::new(
+                1,
+                RateUnit::A,
+                alloc::vec![Period::new(0, decimal!(32.0)).phases(1)],
+            )
+            .starting(start),
+        ));
+        store.install(Profile::new(
+            2,
+            0,
+            Purpose::TxDefaultProfile,
+            ProfileKind::Absolute,
+            Schedule::new(
+                1,
+                RateUnit::A,
+                alloc::vec![Period::new(0, decimal!(16.0)).phases(3)],
+            )
+            .starting(start),
+        ));
+        let composite = store.composite(1, start, 60, RateUnit::A, None);
+        assert_eq!(
+            composite.periods,
+            alloc::vec![CompositePeriod {
+                start_period: 0,
+                limit: Some(decimal!(16.0)),
+                number_phases: Some(1)
+            }]
+        );
+    }
+
+    /// K01.FR.49: a period without `numberPhases` converts with three phases.
+    #[test]
+    fn an_absent_phase_count_converts_as_three_k01_fr_49() {
+        let supply = Supply::default();
+        assert_eq!(
+            supply.convert(decimal!(6900), RateUnit::W, RateUnit::A, None),
+            Some(decimal!(10.000))
+        );
+        assert_eq!(
+            supply.convert(decimal!(2300), RateUnit::W, RateUnit::A, Some(1)),
+            Some(decimal!(10.000))
+        );
     }
 
     #[test]
@@ -981,10 +1100,7 @@ mod tests {
     #[test]
     fn limits_convert_between_amperes_and_watts() {
         let mut store = ProfileStore::new();
-        store.supply = Supply {
-            voltage: decimal!(230.0),
-            phases: 3,
-        };
+        store.supply = Supply::new(decimal!(230.0));
         store.install(Profile::new(
             1,
             0,
