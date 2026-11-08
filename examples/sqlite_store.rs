@@ -27,9 +27,9 @@
 //!
 //! # What "delivered exactly once" means here
 //!
-//! The trait has no "take". The engine calls `pending()` once when it is built, keeps the
-//! messages in memory, sends them oldest first, and calls `ack(seq)` only when the CSMS has
-//! answered. So:
+//! The trait has no "take". The engine reads `pending()` when it is built and whenever it is
+//! told to adopt (below), keeps the messages in memory, sends them oldest first, and calls
+//! `ack(seq)` only when the CSMS has answered. So:
 //!
 //! - every row is in the queue exactly once until it is acknowledged, and then never again;
 //! - a crash between sending and acknowledging leaves the row in place, and the next engine
@@ -56,16 +56,16 @@
 //! queue.push(&transaction_event)?;
 //! ```
 //!
-//! The engine reads the table when it starts, so a row the daemon pushes while the station
-//! runs is durable at once but sent the next time the station builds its engine. A daemon
-//! whose readings must go out live hands them to the station process (any IPC) and lets the
-//! station's own engine queue them; the shared table is what makes both processes' messages
-//! survive either one crashing.
+//! A row the daemon pushes while the station runs is durable at once. It is sent when the
+//! station adopts it: `Engine::adopt_pending` queues every row the engine does not hold yet,
+//! and a Tokio station built with `.store_poll(interval)` does that on connect and every
+//! interval. Adopting twice queues nothing twice.
 //!
 //! `main` below runs the whole scenario and asserts every invariant, so it fails loudly if
 //! any of this stops being true: two real processes enqueue concurrently, the station's
-//! engine drains the queue in order, and a crash between send and acknowledge redelivers
-//! the interrupted message.
+//! engine drains the queue in order, a crash between send and acknowledge redelivers the
+//! interrupted message, and a row the daemon pushes while the station runs is sent once,
+//! without a restart.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -277,6 +277,9 @@ impl Producer {
 
 // --- The demonstration -----------------------------------------------------------------
 
+/// Messages the daemon pushes while the station is running.
+const LIVE: u32 = 5;
+
 /// Messages each process enqueues.
 const PER_PRODUCER: u32 = 50;
 
@@ -353,9 +356,9 @@ fn next_frame<S: MessageStore>(engine: &mut Engine<S>) -> Option<String> {
     })
 }
 
-fn produce(path: &Path, transaction_id: &str) -> Result<(), StoreError> {
+fn produce(path: &Path, transaction_id: &str, count: u32) -> Result<(), StoreError> {
     let mut queue = Producer::open(path)?;
-    for seq_no in 0..PER_PRODUCER {
+    for seq_no in 0..count {
         queue.push(&transaction_event(transaction_id, seq_no))?;
         std::thread::sleep(PUSH_PACE);
     }
@@ -375,7 +378,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     if let [_, role, path] = args.as_slice() {
         if role == "--metering-daemon" {
-            produce(Path::new(path), "tx-meter")?;
+            produce(Path::new(path), "tx-meter", PER_PRODUCER)?;
+            return Ok(());
+        }
+        if role == "--live-daemon" {
+            produce(Path::new(path), "tx-live", LIVE)?;
             return Ok(());
         }
     }
@@ -492,5 +499,42 @@ fn run(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         "rebooted: {} {} redelivered first; all {total} acknowledged once, in order; queue empty",
         in_flight.0, in_flight.1
     );
+
+    live_delivery(path, &mut engine)
+}
+
+/// 4. The station keeps running while the daemon pushes more. Adopting picks the rows up
+///    without a restart; adopting again finds nothing new.
+fn live_delivery(
+    path: &Path,
+    engine: &mut Engine<SqliteStore>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    assert!(
+        Command::new(std::env::current_exe()?)
+            .arg("--live-daemon")
+            .arg(path)
+            .status()?
+            .success(),
+        "the live daemon failed"
+    );
+    assert_eq!(engine.adopt_pending(Instant::ZERO)?, usize::try_from(LIVE)?);
+    let mut live = Vec::new();
+    while let Some(frame) = next_frame(engine) {
+        assert_eq!(
+            engine.adopt_pending(Instant::ZERO)?,
+            0,
+            "nothing is adopted twice"
+        );
+        let (id, transaction, seq_no) = parse_call(&frame);
+        live.push((transaction, seq_no));
+        engine.handle(
+            Instant::ZERO,
+            Input::Received(&format!(r#"[3,"{id}",{{}}]"#)),
+        );
+    }
+    let expected: Vec<(String, u32)> = (0..LIVE).map(|n| ("tx-live".to_owned(), n)).collect();
+    assert_eq!(live, expected, "sent live, once each, in push order");
+    assert_eq!(engine.store().len()?, 0);
+    println!("live: {LIVE} rows pushed while running were adopted and sent once, in order");
     Ok(())
 }

@@ -51,8 +51,9 @@ pub trait MessageStore {
 
     /// Every un-acknowledged message, oldest first.
     ///
-    /// Called once when an engine starts, so a Charging Station replays what a power cut
-    /// interrupted.
+    /// Read when an engine is built, so a Charging Station replays what a power cut
+    /// interrupted, and again by `Engine::adopt_pending`, which queues what another process
+    /// pushed since.
     fn pending(&self) -> Result<Vec<(Seq, QueuedCall)>, StoreError>;
 
     /// Removes a message that has been delivered (or definitively abandoned).

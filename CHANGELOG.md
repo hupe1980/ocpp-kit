@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `Engine::adopt_pending` queues what another process added to the engine's store since it
+  was built — in sequence order, never twice, within `max_queued`. `StationBuilder::store_poll`
+  does it on connect and every interval. `examples/sqlite_store.rs` asserts live delivery.
+
 ## [0.4.0] — 2026-11-07
 
 A hard cut. Breaking changes are marked **Breaking** with what to do.
@@ -351,6 +359,7 @@ property tests over the engine, the ledger and the composite-schedule calculatio
 interop against an independent implementation; end-to-end tests over real sockets; four
 `cargo fuzz` targets; and `thumbv7em-none-eabihf` (`no_std`) and `wasm32` builds in CI.
 
+[Unreleased]: https://github.com/hupe1980/ocpp-kit/compare/v0.4.0...HEAD
 [0.4.0]: https://github.com/hupe1980/ocpp-kit/releases/tag/v0.4.0
 [0.3.0]: https://github.com/hupe1980/ocpp-kit/releases/tag/v0.3.0
 [0.2.0]: https://github.com/hupe1980/ocpp-kit/releases/tag/v0.2.0
