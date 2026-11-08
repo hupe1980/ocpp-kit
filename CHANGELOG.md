@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-11-08
+
 Behaviour now follows OCPP 2.0.1 Edition 4, 2.1 Edition 2 (errata 2026-09 included) and the
 1.6 Security Whitepaper Edition 4. No schema changed; these are the requirement changes that
 touch what the crate implements.
@@ -408,7 +410,8 @@ property tests over the engine, the ledger and the composite-schedule calculatio
 interop against an independent implementation; end-to-end tests over real sockets; four
 `cargo fuzz` targets; and `thumbv7em-none-eabihf` (`no_std`) and `wasm32` builds in CI.
 
-[Unreleased]: https://github.com/hupe1980/ocpp-kit/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/hupe1980/ocpp-kit/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/hupe1980/ocpp-kit/releases/tag/v0.5.0
 [0.4.0]: https://github.com/hupe1980/ocpp-kit/releases/tag/v0.4.0
 [0.3.0]: https://github.com/hupe1980/ocpp-kit/releases/tag/v0.3.0
 [0.2.0]: https://github.com/hupe1980/ocpp-kit/releases/tag/v0.2.0
