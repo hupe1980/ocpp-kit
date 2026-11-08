@@ -41,7 +41,7 @@ fn check_frame(data: &[u8]) {
             Err(error) => {
                 let _ = error.error_code();
                 let _ = error.reply_id();
-                let _ = error.is_ignorable(version);
+                let _ = error.is_ignorable();
             }
         }
     }

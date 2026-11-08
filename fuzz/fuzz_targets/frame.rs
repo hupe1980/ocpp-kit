@@ -22,7 +22,7 @@ fuzz_target!(|data: &[u8]| {
                 // The error must always be able to say how to answer it.
                 let _ = error.error_code();
                 let _ = error.reply_id();
-                let _ = error.is_ignorable(version);
+                let _ = error.is_ignorable();
             }
         }
     }

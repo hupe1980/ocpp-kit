@@ -13,8 +13,8 @@ touch what the crate implements.
 ### Changed
 
 - **Breaking:** 2.0.1 ignores an unknown message type, as 1.6J and 2.1 do (2.0.1 errata
-  2026-02: Part 4 §4.4 removed, `MessageTypeNotSupported` deprecated). Nothing to migrate
-  unless a test expected the `CALLERROR`.
+  2026-02: Part 4 §4.4 removed, `MessageTypeNotSupported` deprecated).
+  `FrameError::is_ignorable()` takes no version: drop the argument.
 - **Breaking:** `smart_charging::Supply` has no `phases`; a period without `numberPhases`
   converts as three phases (K01.FR.49). Build it with `Supply::new(voltage)`; a single-phase
   site sends `numberPhases = 1`.
@@ -27,12 +27,12 @@ touch what the crate implements.
   `IdToken::new(value, kind)`, or `IdToken::tag(value)` for 1.6. `LocalAuthorizationList::update`,
   `get`, `AuthorizationCache::remember`/`get` and `Authorizer::decide`/`remember` take it;
   the cache calls take `now`.
-- The authorization cache never stores a `Central` token (C05.FR.02) and, with
-  `with_lifetime(AuthCacheLifeTime)`, drops an entry without its own expiry that long after its
-  last update (C10.FR.08/10).
 - **Breaking:** the 1.6 `SecurityProfile` key refuses being lowered or re-set, except 3 → 2
   while the new `AllowSecurityProfileDowngrade` key is `true`, and refuses 1 or 2 without an
   `AuthorizationKey` (Whitepaper A05).
+- The authorization cache never stores a `Central` token (C05.FR.02) and, with
+  `with_lifetime(AuthCacheLifeTime)`, drops an entry without its own expiry that long after its
+  last update (C10.FR.08/10).
 - `DataSigned` in `TxStopPoint` no longer ends a transaction (its stop requirement removed).
 - The composite schedule reports the lowest `numberPhases` of the applicable periods
   (K01.FR.140).

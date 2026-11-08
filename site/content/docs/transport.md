@@ -99,8 +99,7 @@ let station = Station::builder()
 # Ok(()) }
 ```
 
-Every slot is validated at build time, not when the station first fails over to it: a fallback
-profile that turns out to be missing its password is worse than no fallback at all. A slot
+Every slot is validated at build time, not when the station first fails over to it. A slot
 without its own password uses the station's `.password()` (B09.FR.16), and
 `NetworkProfile::identity` gives a slot its own identity — path segment and Basic-auth user —
 for a CSMS that knows the station by another name (B09.FR.18). Connecting over a different
