@@ -49,6 +49,12 @@ The builder refuses contradictions: a TLS profile with a `ws://` URL, profile 1 
 password, a TLS profile without a TLS configuration. Getting a security profile wrong should be
 a build error, not a production incident.
 
+`ClientTls` refuses a CSMS certificate whose name is a wildcard (`*.example.com`), after the
+ordinary chain and host-name checks pass: "OCPP-compliant behavior is that a Charging Station
+rejects a connection from a CSMS that presents a wildcard certificate" (2.x
+`AllowCSMSTLSWildcards`, 1.6 `AllowCentralSystemTLSWildcards`). Where that variable is `true`,
+`ClientTls::builder().allow_wildcard_server_certificates()` says so.
+
 Profile 0 exists because a great many 1.6 fleets and back ends run without the Security
 Whitepaper. Any peer that knows a station's identity can be that station, so it is never a
 default: a station reaches it only as `SecurityProfile::Unsecured`, and the builder refuses it

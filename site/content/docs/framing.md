@@ -87,16 +87,16 @@ assert_eq!(error.reply(Version::V2_1), FrameReply::CallResultError);
 assert_eq!(error.reply(Version::V2_0_1), FrameReply::Ignore);
 ```
 
-An unknown message *type* number is ignored on every version. 2.0.1 used to answer it with
-`MessageTypeNotSupported`; the 2.0.1 edition 4 errata removed that and deprecated the code.
+An unknown message *type* number is ignored on every version (2.0.1 errata 2026-02: Part 4
+§4.4 removed, `MessageTypeNotSupported` deprecated).
 
 ```rust
 use ocpp_kit::Version;
 use ocpp_kit::rpc::Frame;
 
-let error = Frame::parse(r#"[7,"1","Whatever",{}]"#, Version::V2_1).unwrap_err();
 for version in [Version::V1_6, Version::V2_0_1, Version::V2_1] {
-    assert!(error.is_ignorable(version));
+    let error = Frame::parse(r#"[7,"1","Whatever",{}]"#, version).unwrap_err();
+    assert!(error.is_ignorable());
 }
 ```
 

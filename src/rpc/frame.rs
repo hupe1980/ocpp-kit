@@ -493,7 +493,7 @@ impl FrameError {
         // A type this version does not define — unknown everywhere, or a 2.1 type on an older
         // version — is ignored before `message_type()` is consulted: a type-6 frame on 2.0.1
         // is not "a SEND", because 2.0.1 has no SEND to recognise it as.
-        if self.is_ignorable(version) {
+        if self.is_ignorable() {
             return FrameReply::Ignore;
         }
         match self.message_type() {
@@ -518,14 +518,10 @@ impl FrameError {
 
     /// Whether the specification says to silently ignore this frame rather than answer it.
     ///
-    /// True for a message type this version does not define, on every version: 1.6J
-    /// §4.1.3, and 2.x Part 4 §4.1 ("it SHALL ignore the message"). 2.0.1 used to answer it
-    /// with `MessageTypeNotSupported` under §4.4; the 2.0.1 edition 4 errata (2026-02) remove
-    /// that section as contradicting §4.1 and deprecate the code. `version` stays in the
-    /// signature because the answer has been per version before.
+    /// True for a message type the version does not define, on every version: 1.6J §4.1.3
+    /// and 2.x Part 4 §4.1 ("it SHALL ignore the message"; 2.0.1 errata 2026-02 removed §4.4).
     #[must_use]
-    pub fn is_ignorable(&self, version: Version) -> bool {
-        let _ = version;
+    pub fn is_ignorable(&self) -> bool {
         matches!(
             self,
             FrameError::UnknownMessageType { .. } | FrameError::MessageTypeNotInVersion { .. }

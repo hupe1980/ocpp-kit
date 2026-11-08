@@ -24,7 +24,7 @@ keywords = ["ocpp", "ev-charging", "emobility", "charging-station", "csms"]
 categories = ["network-programming", "api-bindings", "embedded"]
 # The schemas ship because `tests/schema_conformance.rs` reads them: they are what makes the
 # generated types verifiable rather than merely asserted.
-exclude = ["specs/", ".specify/", ".claude/", ".github/", "site/", "fuzz/", "concepts/", "scripts/"]
+exclude = ["specs/", ".specify/", ".claude/", ".github/", "site/", "fuzz/", "concepts/", "scripts/", "src/transport/testdata/"]
 
 [dependencies]
 serde = { version = "1.0.219", default-features = false, features = ["alloc", "derive"] }
@@ -53,6 +53,8 @@ flate2 = { version = "1.1", optional = true, default-features = false, features 
 tokio-rustls = { version = "0.26", optional = true, default-features = false, features = ["tls12", "ring", "logging"] }
 rustls-pki-types = { version = "1.11", optional = true, features = ["std"] }
 webpki-roots = { version = "1.0", optional = true }
+# The certificate parser rustls already uses, for the wildcard check on a CSMS certificate.
+webpki = { package = "rustls-webpki", version = "0.103", optional = true, default-features = false, features = ["std"] }
 
 [dev-dependencies]
 criterion = { version = "0.7", default-features = false, features = ["cargo_bench_support"] }
@@ -167,6 +169,7 @@ rustls = [
     "dep:tokio-rustls",
     "dep:rustls-pki-types",
     "dep:webpki-roots",
+    "dep:webpki",
 ]
 tracing = ["dep:tracing"]
 cli = ["tokio", "station", "csms", "v1_6", "v2_0_1", "v2_1", "dep:tokio", "tokio/rt-multi-thread"]

@@ -732,6 +732,7 @@ dependencies = [
  "p256",
  "rusqlite",
  "rustls-pki-types",
+ "rustls-webpki",
  "serde",
  "serde_json",
  "serde_path_to_error",

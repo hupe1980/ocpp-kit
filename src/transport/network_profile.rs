@@ -34,6 +34,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::time::Duration;
 
+use crate::types::Identity;
 use crate::version::{Subprotocol, Version};
 
 use super::TransportError;
@@ -47,6 +48,7 @@ pub struct NetworkProfile {
     pub(crate) versions: Option<Subprotocol>,
     pub(crate) security: SecurityProfile,
     pub(crate) password: Option<BasicAuthPassword>,
+    pub(crate) identity: Option<Identity>,
     #[cfg(feature = "rustls")]
     pub(crate) tls: Option<super::tls::ClientTls>,
     pub(crate) message_timeout: Option<Duration>,
@@ -63,6 +65,7 @@ impl NetworkProfile {
             versions: None,
             security: SecurityProfile::BasicAuth,
             password: None,
+            identity: None,
             #[cfg(feature = "rustls")]
             tls: None,
             message_timeout: None,
@@ -105,6 +108,17 @@ impl NetworkProfile {
     #[must_use]
     pub fn password(mut self, password: BasicAuthPassword) -> Self {
         self.password = Some(password);
+        self
+    }
+
+    /// The identity this profile connects under — its URL path segment and Basic-auth user
+    /// name — instead of the station's.
+    ///
+    /// B09.FR.18 (2.1): an `Identity` set for a `NetworkConnectionProfile` is used for that
+    /// profile; one that sets none uses the station's (B09.FR.16).
+    #[must_use]
+    pub fn identity(mut self, identity: Identity) -> Self {
+        self.identity = Some(identity);
         self
     }
 

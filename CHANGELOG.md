@@ -13,16 +13,26 @@ touch what the crate implements.
 ### Changed
 
 - **Breaking:** 2.0.1 ignores an unknown message type, as 1.6J and 2.1 do (2.0.1 errata
-  2026-02: Part 4 §4.4 removed, `MessageTypeNotSupported` deprecated). Nothing to migrate
-  unless a test expected the `CALLERROR`.
+  2026-02: Part 4 §4.4 removed, `MessageTypeNotSupported` deprecated).
+  `FrameError::is_ignorable()` takes no version: drop the argument.
 - **Breaking:** `smart_charging::Supply` has no `phases`; a period without `numberPhases`
   converts as three phases (K01.FR.49). Build it with `Supply::new(voltage)`; a single-phase
   site sends `numberPhases = 1`.
 - **Breaking:** `BasicAuthPassword::hex` (1.6 `AuthorizationKey`) requires 16–20 bytes
   (Whitepaper A00.FR.205), failing with `CredentialError::KeyLength`.
+- **Breaking:** `ClientTls` refuses a CSMS certificate with a wildcard name, as 2.x
+  `AllowCSMSTLSWildcards` / 1.6 `AllowCentralSystemTLSWildcards` require by default. Opt in
+  with `ClientTls::builder().allow_wildcard_server_certificates()`.
+- **Breaking:** local authorization keys tokens by value **and** type (C01.FR.25):
+  `IdToken::new(value, kind)`, or `IdToken::tag(value)` for 1.6. `LocalAuthorizationList::update`,
+  `get`, `AuthorizationCache::remember`/`get` and `Authorizer::decide`/`remember` take it;
+  the cache calls take `now`.
 - **Breaking:** the 1.6 `SecurityProfile` key refuses being lowered or re-set, except 3 → 2
   while the new `AllowSecurityProfileDowngrade` key is `true`, and refuses 1 or 2 without an
   `AuthorizationKey` (Whitepaper A05).
+- The authorization cache never stores a `Central` token (C05.FR.02) and, with
+  `with_lifetime(AuthCacheLifeTime)`, drops an entry without its own expiry that long after its
+  last update (C10.FR.08/10).
 - `DataSigned` in `TxStopPoint` no longer ends a transaction (its stop requirement removed).
 - The composite schedule reports the lowest `numberPhases` of the applicable periods
   (K01.FR.140).
@@ -33,6 +43,10 @@ touch what the crate implements.
 
 ### Added
 
+- `NetworkProfile::identity`: a slot connects under its own identity — path and Basic-auth
+  user (B09.FR.18).
+- `standard::security_events_1_6`: the 1.6 Security Whitepaper's 21 events with their own
+  criticality, generated from edition 4 §8.
 - `Engine::require_boot`: re-opens the boot gate. The Tokio station calls it after
   connecting over a different configuration slot (B10.FR.10).
 - `AuthorizationPolicy::local_list_supports_expiry` (`LocalAuthListCtrlr.SupportsExpiryDateTime`,

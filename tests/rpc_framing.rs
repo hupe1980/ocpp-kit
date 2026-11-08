@@ -66,8 +66,7 @@ fn unknown_message_type_is_ignored_on_every_version() {
     for version in [Version::V1_6, Version::V2_0_1, Version::V2_1] {
         let error = Frame::parse(text, version).unwrap_err();
         assert!(matches!(error, FrameError::UnknownMessageType { .. }));
-        // 2.0.1 answered it under §4.4 until the edition 4 errata removed that section.
-        assert!(error.is_ignorable(version));
+        assert!(error.is_ignorable());
         assert_eq!(error.error_code(), ErrorCode::MessageTypeNotSupported);
     }
 }

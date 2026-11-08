@@ -15,7 +15,7 @@ logic in your binary.
 | **L2** | [`engine`] | A sans-I/O protocol engine: correlation, the one-outstanding-`CALL` rule, timeouts, transaction retries, the offline queue, the boot state machine | ✅ `alloc` |
 | **L3** | [`transport`] | Tokio + `rustls`, with its own RFC 6455 WebSocket and RFC 7692 compression: [`Station`](transport::Station), [`Csms`](transport::Csms), [`LocalController`](transport::LocalController), security profiles 0 (1.6 only) to 3, network failover | – |
 | **L4** | [`station`], [`csms`] | Opt-in building blocks: device model, 1.6 configuration keys, transaction rules, local authorization, composite schedules, an idempotent CSMS ledger, version-agnostic events | partial |
-| — | [`standard`] | The catalogues that live outside the schemas: security events with their criticality, 74 standardized components, 448 variables, reason codes | ✅ `alloc` |
+| — | [`standard`] | The catalogues that live outside the schemas: security events with their criticality, 74 standardized components, 458 variables, reason codes | ✅ `alloc` |
 | — | [`metering`] | Signed meter values: the record a customer may be billed for, in every version's hiding place | ✅ `alloc` |
 
 ## Getting started
