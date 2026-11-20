@@ -6,6 +6,33 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-11-21
+
+A vehicle to test a controller against, the 2.1 DER controls a station reports, and EV needs on
+2.0.1 as well as 2.1.
+
+### Added
+
+- `smart_charging::der` (2.1): `DerReport` collects a `GetDERControl` answer into `DerControls`;
+  `effective_at(t)` applies the §2.9 precedence, `limiting_at(t)` names the controls that can lower
+  or stop active power; `DerAlarmState` tracks the one alarm (R05); `der::check` refuses a
+  `SetDERControlRequest` that breaks R04.FR.13/15/17/50–56.
+- `smart_charging::EvNeeds`: `NotifyEVChargingNeeds` from 2.0.1 and 2.1 — AC, DC and V2X — with
+  phases from the transfer mode and `max_charge_power(Supply)`.
+- `testkit::Ev`: a vehicle on virtual time — reaction delay, minimum current, phase switching,
+  target, taper, bidirectional discharge to a floor — with exact energy integration.
+- `testkit::Wallbox`: one simulated EVSE for 1.6, 2.0.1 and 2.1 that applies `SetChargingProfile`,
+  `ClearChargingProfile` and `UpdateDynamicSchedule` and reports what a station sends.
+- `MockStation::connect_with(url, identity, answer)`; the mocks answer `StartTransaction`,
+  `StopTransaction`, `NotifyEVChargingNeeds` and the DER notifications.
+- `decode::from_str::<T>(text)`: a strictly decoded, validated payload from JSON text.
+
+### Changed
+
+- **Breaking:** `smart_charging::v2x::EvV2x` is `smart_charging::EvNeeds`:
+  `EvV2x::from_v2_1` → `EvNeeds::from_v2_1`, `target_energy` → `energy`.
+- The `tracing` feature enables `tokio`: only the transport traces.
+
 ## [0.6.0] — 2026-11-20
 
 The CSMS edge, per-phase telemetry, and smart charging from plan to wire, including 2.1
@@ -444,7 +471,8 @@ property tests over the engine, the ledger and the composite-schedule calculatio
 interop against an independent implementation; end-to-end tests over real sockets; four
 `cargo fuzz` targets; and `thumbv7em-none-eabihf` (`no_std`) and `wasm32` builds in CI.
 
-[Unreleased]: https://github.com/hupe1980/ocpp-kit/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/hupe1980/ocpp-kit/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/hupe1980/ocpp-kit/releases/tag/v0.7.0
 [0.6.0]: https://github.com/hupe1980/ocpp-kit/releases/tag/v0.6.0
 [0.5.0]: https://github.com/hupe1980/ocpp-kit/releases/tag/v0.5.0
 [0.4.0]: https://github.com/hupe1980/ocpp-kit/releases/tag/v0.4.0

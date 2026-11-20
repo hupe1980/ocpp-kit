@@ -210,6 +210,58 @@ assert!(csms.wait_for("BootNotification", Duration::from_secs(5)).await);
 `MockCsms::builder().answer(…)` replaces the canned responses, which is how the failure paths
 get exercised: return `Err(CallError::…)` and the mock answers a `CALLERROR`.
 
+**A vehicle, and a wallbox to plug it into.** A controller — an energy manager, a CSMS doing
+smart charging — is tested against what a vehicle *does*, not against messages. `Ev` is a
+vehicle on virtual time, and every failure a controller meets in the field is a reaction it
+models:
+
+| The vehicle… | `Ev` |
+|---|---|
+| follows a new ceiling seconds later | `reaction(delay)`, default 2 s |
+| draws nothing below 6 A — a 4 A ceiling is a pause, not a slow charge | `current(min, max)`, state `SuspendedEvse` |
+| pauses when the station switches 3 → 1 phase, or never recovers until replugged | `PhaseSwitching::Follows { pause }` / `StopsCharging` |
+| stops at its target state of charge, or tapers before it | `target_soc`, `taper_above`, state `SuspendedEv` |
+| discharges to a floor and no further | `bidirectional(max_w)`, `floor_soc` |
+
+Energy is integrated exactly. `Wallbox` holds one: it applies `SetChargingProfile`,
+`ClearChargingProfile` and (2.1) `UpdateDynamicSchedule` with the crate's own composite
+calculation, and returns what a station would send — `StatusNotification`, `TransactionEvent`
+(1.6: `StartTransaction`, `MeterValues`, `StopTransaction`) and `NotifyEVChargingNeeds`.
+
+```rust
+use std::time::Duration;
+use ocpp_kit::Version;
+use ocpp_kit::testkit::{Ev, EvState, PhaseSwitching, Wallbox};
+use ocpp_kit::types::Decimal;
+
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let mut wallbox = Wallbox::new(Version::V2_0_1, "2026-11-20T18:00:00Z".parse()?);
+let vehicle = Ev::builder()
+    .battery_wh(60_000).soc(30).target_soc(80)
+    .phase_switching(PhaseSwitching::StopsCharging)
+    .build();
+let sent = wallbox.plug_in(vehicle)?;       // StatusNotification, TransactionEvent, NotifyEVChargingNeeds
+
+// What your CSMS sends: one phase at 16 A.
+let answer = wallbox.handle("SetChargingProfile", r#"{"evseId":1,"chargingProfile":{
+    "id":1,"stackLevel":0,"chargingProfilePurpose":"TxDefaultProfile","chargingProfileKind":"Relative",
+    "chargingSchedule":[{"id":1,"chargingRateUnit":"A",
+    "chargingSchedulePeriod":[{"startPeriod":0,"limit":16,"numberPhases":1}]}]}}"#);
+assert!(answer.unwrap()?.contains("Accepted"));
+
+let reported = wallbox.advance(Duration::from_secs(3600)); // an hour, instantly
+// This vehicle started on one phase, so nothing switched: it charged at 3.68 kW.
+assert_eq!(wallbox.ev().unwrap().reading().power, Decimal::from(3680));
+assert_eq!(wallbox.ev().unwrap().state(), EvState::Charging);
+# let _ = (sent, reported);
+# Ok(()) }
+```
+
+The wallbox does no I/O: deliver its `Outgoing` messages however your test reaches the CSMS, or
+over a real socket with `MockStation::connect_with(url, id, answer)`. On 1.6, hand it the CSMS's
+`StartTransaction` answer with `answered`; it never invents a transaction id. On 2.1 a `Dynamic`
+setpoint profile lapses when your arbiter stops updating it (K28.FR.13).
+
 ### What is deliberately not in it
 
 There is **no JSON Schema generator or validator**, though this crate has both and uses them

@@ -141,7 +141,7 @@ only in 2.1. All of it is in the code, with the citation next to it.
 | `csms` | – | L4 CSMS blocks |
 | `tracing` | – | `tracing` spans and events in the transport |
 | `cli` | – | The `ocpp-cli` binary |
-| `testkit` | – | [`Sim`](testkit::Sim), [`Recorder`](testkit::Recorder) and mock peers, for your `[dev-dependencies]` |
+| `testkit` | – | [`Sim`](testkit::Sim), [`Recorder`](testkit::Recorder), mock peers, and a simulated vehicle ([`Ev`](testkit::Ev)) and [`Wallbox`](testkit::Wallbox), for your `[dev-dependencies]` |
 | `full` | – | Everything above |
 
 ## The JSON schemas

@@ -25,7 +25,7 @@ $ cargo add ocpp-kit --features tokio,rustls
 | **L2** | `engine` | A **sans-I/O** protocol engine: correlation, the one-outstanding-`CALL` rule, timeouts, transaction retries, the offline queue, the boot state machine | ✅ `alloc` |
 | **L3** | `transport` | Tokio + `rustls`, with its own RFC 6455 WebSocket and RFC 7692 compression: charging station, CSMS and local controller; security profiles 0 (1.6 only) to 3, profile 2 and 3 on one listener; per-station message rate and idle timeout; network failover | – |
 | **L4** | `station` · `csms` | Opt-in blocks: device model, 1.6 configuration keys, transaction rules, local authorization, an idempotent CSMS ledger, version-agnostic events with phase-aware telemetry | partial |
-| — | `smart_charging` | Block K for both sides: the composite schedule, a quarter-hour plan into a valid `TxProfile` within the station's limits, `ChargingProfile` across the wire for every version, and 2.1 bidirectional charging (V2X operation modes, dynamic setpoints, the EV's capabilities) | ✅ `alloc` |
+| — | `smart_charging` | Block K for both sides: the composite schedule, a quarter-hour plan into a valid `TxProfile` within the station's limits, `ChargingProfile` across the wire for every version, 2.1 bidirectional charging (V2X operation modes, dynamic setpoints), what the EV needs on 2.0.1 and 2.1, and the 2.1 DER controls a station reports | ✅ `alloc` |
 | — | `standard` | The catalogues that live outside the schemas: security events with their criticality, 74 standardized components, 458 variables, reason codes | ✅ `alloc` |
 | — | `metering` | Signed meter values: where each version hides the record a customer may be billed for, and how to read its public-key envelope | ✅ `alloc` |
 
@@ -132,6 +132,9 @@ listener can serve profiles 2 and 3. Every session ends with a `DisconnectReason
 2.1 station the same way. `ChargingPlan::to_profile` turns quarter-hour ceilings into one
 `TxProfile` within the station's limits that never exceeds the plan, and `smart_charging::v2x` does
 the same for 2.1 setpoints — discharge is a magnitude, so there is no sign to get wrong.
+`EvNeeds` reads what the vehicle asks for from 2.0.1 and 2.1 alike, and `smart_charging::der`
+answers the question a V2H planner has about a station's grid-code controls: which of the ones in
+effect can lower or stop the discharge it is counting on.
 
 **The value that pays for the electricity.** Under German calibration law a customer may only
 be billed for a value they can check, which is the record the *meter* signed — not the
@@ -239,6 +242,23 @@ assert!(csms.wait_for("BootNotification", Duration::from_secs(5)).await);
 # Ok(()) }
 ```
 
+**And a vehicle to test a controller against.** `testkit::Ev` reacts the way a car does — late,
+not at all below 6 A, with a pause or a fault when the phases switch, stopping at its target — and
+`testkit::Wallbox` plugs it into a simulated EVSE that answers your CSMS's charging profiles and
+reports back, in 1.6, 2.0.1 or 2.1, on virtual time:
+
+```rust
+# use std::time::Duration;
+# use ocpp_kit::Version;
+# use ocpp_kit::testkit::{Ev, Wallbox};
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let mut wallbox = Wallbox::new(Version::V2_0_1, "2026-11-20T18:00:00Z".parse()?);
+let sent = wallbox.plug_in(Ev::builder().soc(30).build())?;   // what your CSMS receives
+let reports = wallbox.advance(Duration::from_secs(8 * 3600));  // a night, in milliseconds
+# let _ = (sent, reports);
+# Ok(()) }
+```
+
 **A `SEND` cannot be awaited.** OCPP 2.1's `SEND` is never answered (Part 4 §4.2.4), so
 `Handle::call` does not accept one — the bound is `Confirmed`, which the code generator
 implements for exactly the actions whose schemas define a response. Unconfirmed messages go
@@ -289,7 +309,7 @@ $ ocpp-cli station --url ws://… --identity CS-0001  # a mock charging station
 | `compression` | – | RFC 7692 `permessage-deflate`, which 2.1 requires of a CSMS |
 | `signed-messages` | – | JWS signed messages (Part 4 ch. 7) |
 | `getrandom` | – | Random `MessageId`s and `transactionId`s, which is what Part 4 §4.1.4 and E01.FR.08 need; implied by `tokio` |
-| `testkit` | – | A recorder for the sans-I/O engine and mock peers, for your `[dev-dependencies]` |
+| `testkit` | – | A recorder for the sans-I/O engine, mock peers, and a simulated vehicle and wallbox, for your `[dev-dependencies]` |
 | `jws-es256` | – | A ready-made software ES256 signer and verifier |
 | `station`, `csms` | – | The L4 building blocks |
 | `tracing` | – | `tracing` spans and events in the transport |

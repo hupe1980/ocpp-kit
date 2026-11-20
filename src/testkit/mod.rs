@@ -18,11 +18,17 @@
 //! Put `ocpp-kit` with `features = ["testkit"]` in `[dev-dependencies]`, not
 //! `[dependencies]`.
 
+mod ev;
 mod recorder;
 mod sim;
+#[cfg(all(feature = "v1_6", feature = "v2_0_1", feature = "v2_1"))]
+mod wallbox;
 
+pub use ev::{Command, Ev, EvBuilder, EvError, EvState, Limit, PhaseSwitching, Power, Reading};
 pub use recorder::Recorder;
 pub use sim::Sim;
+#[cfg(all(feature = "v1_6", feature = "v2_0_1", feature = "v2_1"))]
+pub use wallbox::{ID_TAG, Outgoing, Wallbox};
 
 #[cfg(feature = "tokio")]
 mod mock;

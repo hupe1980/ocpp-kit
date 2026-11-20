@@ -1,4 +1,7 @@
-//! Bidirectional charging (OCPP 2.1 block Q): operation modes, setpoints, and what the EV can do.
+//! Bidirectional charging (OCPP 2.1 block Q): operation modes and setpoints.
+//!
+//! What the EV can do comes from [`EvNeeds`], whose
+//! [`clamp_watts`](super::EvNeeds::clamp_watts) fits a setpoint into it.
 //!
 //! [`ChargingPlan`] tells a station what it may *draw*. A V2H or V2B
 //! controller also tells it what the EV should *do* — charge at 3.7 kW, discharge 5 kW into the
@@ -65,12 +68,11 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
-use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 use core::time::Duration;
 
-use super::{ChargingPlan, RateUnit, StationLimits, Target};
+use super::{ChargingPlan, EvNeeds, RateUnit, StationLimits, Target};
 use crate::types::{DateTime, Decimal};
 use crate::v2_1;
 
@@ -847,83 +849,11 @@ impl DynamicSetpoint {
     }
 }
 
-/// What the EV can do, from the station's `NotifyEVChargingNeedsRequest` (§2.155).
-///
-/// Powers are in W and are **magnitudes**, whatever direction; per-phase values are summed (when
-/// the EV reports `_L2`/`_L3`, the plain field is phase L1 only).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct EvV2x {
-    /// The energy transfer the EV and station agreed, e.g. `AC_BPT`.
-    pub requested: String,
-    /// Whether that transfer is bidirectional.
-    pub bidirectional: bool,
-    /// Most the EV can charge with.
-    pub max_charge: Option<Decimal>,
-    /// Least it can usefully charge with.
-    pub min_charge: Option<Decimal>,
-    /// Most it can discharge with.
-    pub max_discharge: Option<Decimal>,
-    /// Least it can usefully discharge with.
-    pub min_discharge: Option<Decimal>,
-    /// The energy the EV wants, in Wh.
-    pub target_energy: Option<Decimal>,
-    /// The energy it needs at least.
-    pub min_energy: Option<Decimal>,
-    /// The energy it can take at most.
-    pub max_energy: Option<Decimal>,
-    /// The state of charge it aims for, in %.
-    pub target_soc: Option<i32>,
-    /// When it leaves.
-    pub departure: Option<DateTime>,
-}
-
-impl EvV2x {
-    /// Reads the EV's needs.
-    #[must_use]
-    pub fn from_v2_1(needs: &v2_1::ChargingNeeds) -> Self {
-        let requested = needs.requested_energy_transfer.as_str();
-        let bidirectional = matches!(
-            requested,
-            "AC_BPT" | "AC_BPT_DER" | "DC_BPT" | "DC_ACDP_BPT"
-        );
-        let mut ev = Self {
-            requested: requested.into(),
-            bidirectional,
-            departure: needs.departure_time,
-            ..Self::default()
-        };
-        if let Some(v2x) = &needs.v2x_charging_parameters {
-            ev.max_charge = total(
-                v2x.max_charge_power,
-                v2x.max_charge_power_l2,
-                v2x.max_charge_power_l3,
-            );
-            ev.min_charge = total(
-                v2x.min_charge_power,
-                v2x.min_charge_power_l2,
-                v2x.min_charge_power_l3,
-            );
-            ev.max_discharge = total(
-                v2x.max_discharge_power,
-                v2x.max_discharge_power_l2,
-                v2x.max_discharge_power_l3,
-            );
-            ev.min_discharge = total(
-                v2x.min_discharge_power,
-                v2x.min_discharge_power_l2,
-                v2x.min_discharge_power_l3,
-            );
-            ev.target_energy = v2x.ev_target_energy_request;
-            ev.min_energy = v2x.ev_min_energy_request;
-            ev.max_energy = v2x.ev_max_energy_request;
-            ev.target_soc = v2x.target_so_c;
-        }
-        ev
-    }
-
-    /// `setpoint` (in W) clamped to what the EV can do: no faster than `max_charge`, no faster
-    /// than `max_discharge`, and no discharge at all unless the transfer is bidirectional.
+impl EvNeeds {
+    /// `setpoint` (in W) clamped to what the EV can do: no faster than
+    /// [`max_charge`](EvNeeds::max_charge), no faster than
+    /// [`max_discharge`](EvNeeds::max_discharge), and no discharge at all unless the transfer is
+    /// bidirectional.
     #[must_use]
     pub fn clamp_watts(&self, setpoint: Setpoint) -> Setpoint {
         let value = setpoint.signed();
@@ -936,18 +866,6 @@ impl EvV2x {
             Setpoint(floor.map_or(value, |floor| value.max(floor)))
         }
     }
-}
-
-/// A total over all phases: the plain field alone, or — when `_L2`/`_L3` are given and the plain
-/// field is therefore L1 — the sum.
-fn total(base: Option<Decimal>, l2: Option<Decimal>, l3: Option<Decimal>) -> Option<Decimal> {
-    if l2.is_none() && l3.is_none() {
-        return base;
-    }
-    [base, l2, l3]
-        .into_iter()
-        .flatten()
-        .try_fold(Decimal::ZERO, Decimal::checked_add)
 }
 
 #[cfg(test)]
@@ -1276,26 +1194,17 @@ mod tests {
         );
     }
 
-    fn needs(json: &str) -> v2_1::ChargingNeeds {
-        serde_json::from_str(json).unwrap()
+    fn needs(json: &str) -> EvNeeds {
+        EvNeeds::from_v2_1(&serde_json::from_str(json).unwrap())
     }
 
     #[test]
-    fn the_ev_reads_in_magnitudes_and_sums_its_phases() {
-        let ev = EvV2x::from_v2_1(&needs(
+    fn a_setpoint_is_clamped_to_what_the_ev_can_do() {
+        let ev = needs(
             r#"{"requestedEnergyTransfer":"AC_BPT","v2xChargingParameters":{
                 "maxChargePower":11000,"maxDischargePower":2000,"maxDischargePower_L2":2000,
-                "maxDischargePower_L3":2000,"evTargetEnergyRequest":20000,"targetSoC":80}}"#,
-        ));
-        assert!(ev.bidirectional);
-        assert_eq!(ev.max_charge, Some(w(11000)));
-        assert_eq!(
-            ev.max_discharge,
-            Some(w(6000)),
-            "the plain field is L1 when L2/L3 are given"
+                "maxDischargePower_L3":2000}}"#,
         );
-        assert_eq!(ev.target_energy, Some(w(20000)));
-        assert_eq!(ev.target_soc, Some(80));
         assert_eq!(
             ev.clamp_watts(Setpoint::charge(w(22000)).unwrap()),
             Setpoint::charge(w(11000)).unwrap()
@@ -1305,7 +1214,7 @@ mod tests {
             Setpoint::discharge(w(6000)).unwrap()
         );
 
-        let plain = EvV2x::from_v2_1(&needs(r#"{"requestedEnergyTransfer":"AC_three_phase"}"#));
+        let plain = needs(r#"{"requestedEnergyTransfer":"AC_three_phase"}"#);
         assert!(!plain.bidirectional);
         assert_eq!(
             plain.clamp_watts(Setpoint::discharge(w(1000)).unwrap()),
