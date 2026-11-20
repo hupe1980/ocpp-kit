@@ -1,6 +1,6 @@
 +++
 title = "Domain building blocks"
-description = "Device model, 1.6 configuration keys, transaction rules, local authorization, composite charging schedules, and an idempotent CSMS transaction ledger."
+description = "Device model, 1.6 configuration keys, transaction rules, local authorization, smart charging (composite schedules, plans, wire profiles), an idempotent CSMS transaction ledger and phase-aware telemetry."
 weight = 70
 +++
 
@@ -235,13 +235,15 @@ A differential `SendLocalList` whose version does not advance is refused
 (`UpdateStatus::VersionMismatch`), which is what stops two out-of-order updates from silently
 reordering the list.
 
-### Smart charging
+## Smart charging (both sides)
 
-Smart charging is the one part of OCPP that hands you a *calculation*.
+Smart charging is the one part of OCPP that hands you a *calculation*. `smart_charging` needs no
+feature and no `std`: a station uses it to apply profiles, a CSMS or a home energy manager to
+build them.
 
 ```rust
 use ocpp_kit::decimal;
-use ocpp_kit::station::smart_charging::{
+use ocpp_kit::smart_charging::{
     Period, ProfileKind, ProfileStore, Purpose, RateUnit, Schedule, Profile,
 };
 use ocpp_kit::types::DateTime;
@@ -286,6 +288,104 @@ The rules are Part 2 §3.5 and §3.6, which say different things and are easy to
 
 Recurring profiles repeat daily or weekly, validity windows bound a profile, and limits
 convert between amperes and watts from the supply parameters.
+
+### From a plan to a profile
+
+Per-slot ceilings in, one `TxProfile` the station accepts out:
+
+```rust
+use std::time::Duration;
+use ocpp_kit::smart_charging::{Ceiling, ChargingPlan, RateUnits, StationLimits, Supply, Target};
+use ocpp_kit::types::{DateTime, Decimal};
+
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let start: DateTime = "2026-11-20T00:00:00Z".parse()?;
+// Tomorrow's 96 quarter hours from the planner, in watts, on three phases.
+let ceilings = (0..96).map(|slot| Ceiling::watts(Decimal::from(if slot < 28 { 11_000 } else { 4_200 })).phases(3));
+let plan = ChargingPlan::new(start, Duration::from_secs(900), ceilings)?;
+
+// What the station says about itself: PeriodsPerSchedule, ProfileStackLevel, RateUnit.
+let limits = StationLimits::new(24, 3, RateUnits::parse_v2("A"));
+let planned = plan.to_profile(1, 1, Target::transaction(1, "tx-4711"), &limits, Supply::default())?;
+
+let request = planned.profile.set_request_v2_1()?; // or set_request_v1_6 / _v2_0_1
+# let _ = request;
+# Ok(()) }
+```
+
+* **A ceiling stays a ceiling.** W → A rounds down (7400 W on three phases at 230 V is 10.724 A,
+  not 10.725). Too many slots for `PeriodsPerSchedule` merge into the lower limit and fewer phases,
+  never truncate; `Planned::coarsened` says so.
+* **Block K by construction**: `Absolute`, first period at 0, ascending, one schedule, no
+  `phaseToUse`; stack level, rate unit and EVSE are checked (`PlanError`).
+* `RateUnits::parse_v16("Current,Power")` / `parse_v2("A,W")` read the station's variable.
+
+Send one profile per plan, not per slot: a 2.1 station may refuse frequent `SetChargingProfile`
+(K01.FR.56). A plan holds ceilings only — a floor needs 2.1 setpoints (below).
+
+### Across the wire
+
+`Profile::to_v1_6` / `to_v2_0_1` / `to_v2_1` and `set_request_*` send a profile;
+`Profile::from_v1_6(&wire, connector)` / `from_v2_0_1` / `from_v2_1` read one. What a side cannot
+carry with its meaning is a `ConversionError`, never a default: a non-integer 1.6 transaction id, a
+purpose the version lacks, a 2.1 `Dynamic` profile or a V2X period. Every request validates against
+its version's schema.
+
+### Bidirectional charging (2.1)
+
+`smart_charging::v2x` builds 2.1 operation modes and setpoints (block Q) so that each of its traps is
+a type or a typed error:
+
+```rust
+use std::time::Duration;
+use ocpp_kit::smart_charging::v2x::{DynamicSetpoint, Operation, OperationModes, Setpoint, V2xPlan, V2xStation};
+use ocpp_kit::smart_charging::{RateUnit, RateUnits, StationLimits, Target};
+use ocpp_kit::types::{DateTime, Decimal};
+
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+// What the station reported: PeriodsPerSchedule, ProfileStackLevel, RateUnit, and
+// V2XChargingCtrlr.SupportedOperationModes.
+let station = V2xStation::new(
+    StationLimits::new(24, 3, RateUnits::parse_v2("W")),
+    OperationModes::parse("ChargingOnly,CentralSetpoint,Idle"),
+);
+let w = Decimal::from;
+
+// Charge at night, idle in the morning, cover the evening peak from the battery.
+let plan = V2xPlan::new("2026-11-20T00:00:00Z".parse::<DateTime>()?, Duration::from_secs(6 * 3600), [
+    Operation::central_setpoint(Setpoint::charge(w(3700))?),
+    Operation::idle().sleep_evse()?,
+    Operation::central_setpoint(Setpoint::discharge(w(5000))?).discharge_at_most(w(6000))?,
+    Operation::charging_only(w(11000))?,
+])?;
+let day = plan.to_request(1, 1, Target::transaction(1, "tx-1"), RateUnit::W, &station)?;
+
+// The one-second arbiter: a Dynamic profile at a higher stack level that the station drops
+// 30 s after the last update.
+let mut follow = DynamicSetpoint::new(2, Target::transaction(1, "tx-1"), RateUnit::W,
+    Operation::central_setpoint(Setpoint::ZERO).discharge_at_most(w(7000))?, Duration::from_secs(30))?
+    .stack_level(2);
+let install = follow.to_request(&station)?;
+let every_second = follow.update_setpoint(Setpoint::discharge(w(2400))?)?;
+# let _ = (day, install, every_second);
+# Ok(()) }
+```
+
+| Trap in block Q | Here |
+|---|---|
+| Each mode allows different fields (Q §2.2): `ChargingOnly` needs `limit`, `CentralSetpoint` needs `setpoint`, `Idle` forbids all four (Q10.FR.01) | `Operation`'s constructors per mode; a field the mode does not take is `V2xError::NotInMode` |
+| A setpoint outside `[dischargeLimit, limit]` is rejected (V2X.05) | checked when the operation is built and on every update |
+| `setpoint` is signed, `dischargeLimit` negative, but the EV's `maxDischargePower` is positive | nothing takes a signed discharge: `Setpoint::discharge(w)` and `discharge_at_most(w)` take magnitudes and the wire gets the sign |
+| A `Dynamic` profile keeps its last setpoint until its `duration` runs out (K28.FR.13) | `DynamicSetpoint::new` *requires* that fallback — a crashed controller cannot leave the EV discharging |
+| A Dynamic profile is one schedule with one period at 0 (K28.FR.01/02); `dynUpdateInterval` only on Dynamic (K28.FR.04) | built that way; `pull_every` sets the interval, `pull_response` answers the station's pull |
+| An update carries no `operationMode` | `update` refuses to change the mode: send a new profile |
+| A mode the station does not list is rejected (Q09.FR.01) | checked against `SupportedOperationModes`; `OperationModes::MANDATORY` when it reports none |
+
+A V2X plan merges only identical neighbours (setpoints are targets, not ceilings).
+
+`EvV2x::from_v2_1(&needs)` reads the EV's charge and discharge range from
+`NotifyEVChargingNeedsRequest` as magnitudes in W, summed over `_L2`/`_L3` when given;
+`clamp_watts` fits a setpoint into it and refuses discharge unless the transfer is bidirectional.
 
 ## CSMS-side (`csms`)
 
@@ -440,6 +540,41 @@ if let DomainEvent::TransactionUpdated { charging_state, evse_id, .. } = event {
 other: `StartTransaction.connectorId` fills `connector_id` and leaves `evse_id` empty. A CSMS
 addressing a 2.x-shaped inventory with a 1.6 connector number would aim at the wrong outlet.
 
+### What a station draws, per phase
+
+Every sampled value, with the specification's defaults applied:
+
+```rust,no_run
+use ocpp_kit::csms::telemetry::{measurand, Total};
+use ocpp_kit::types::Decimal;
+# fn example(observed: &ocpp_kit::csms::events::Observed) {
+let measurements = observed.event.measurements();
+let current = measurements.per_phase(measurand::CURRENT_IMPORT);
+// [Some(16), Some(16), Some(0.2)] — and 2 phases actually in use.
+let _ = (current.lines, current.phases_in_use(Decimal::from(1)));
+
+match measurements.per_phase(measurand::POWER_ACTIVE_IMPORT).total {
+    Some(Total::Reported(watts)) => println!("{watts} W, as the station said"),
+    Some(Total::Summed(watts)) => println!("{watts} W, the sum of its three phases"),
+    None => {}
+}
+# }
+```
+
+The rules, all from 2.x §2.87 and 1.6 §7.45:
+
+| | Rule |
+|---|---|
+| No `phase` | an *overall* value, not phase 1 |
+| `L1`, `L1-N` | both line 1; a line-to-line value (`L1-L2`) is not per-phase, `N` is the neutral |
+| No `location` | `Outlet` — what the EV gets; `per_phase_at(m, &Location::Inlet)` for the grid side |
+| Units | normalized exactly to W, Wh, A, V, var, varh, VA, VAh, Hz, %: `kW`, `kWh` and the 2.x `multiplier` move the decimal point |
+| No unit | the measurand's natural one (`Power.*` → W); the schema's literal `Wh` is right for energy only |
+| Unknown unit | kept verbatim, unconverted, with a `UnknownUnit` warning |
+| Totals | `Reported`, or `Summed` from all three lines — for active/reactive power and energy only, never for currents or voltages |
+
+Each per-phase slot holds the latest sample; `measurand::*` names the common measurands.
+
 ### Into the ledger
 
 `to_ledger_event` is the only bridge, so a CSMS supporting 1.6 and 2.x writes one adapter
@@ -472,8 +607,10 @@ for warning in &observed.warnings {
 # }
 ```
 
-`WarningKind` covers unreadable signed data, an unreadable 1.6 reading, an energy register in
-a unit that is not an energy unit, and one out of range. Each is a station saying something
+`WarningKind` covers unreadable signed data, an unreadable 1.6 reading of any measurand, an
+energy register in a unit that is not an energy unit, any other measurand in a unit the kit does
+not know, and a value out of range. A warning's `Display` is one line: its detail is whatever the
+station sent, with control characters escaped. Each is a station saying something
 malformed about a value that decides money, and each otherwise fails silently: a station that
 *claims* to send signed meter data and sends something unparseable looks, through the funnel
 alone, exactly like one sending none.

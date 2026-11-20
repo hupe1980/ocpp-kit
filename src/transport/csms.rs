@@ -17,14 +17,17 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, broadcast, mpsc, watch};
 
 use crate::decode::DecodeOptions;
-use crate::engine::{BootState, CallFailure, CallOptions, Engine, EngineConfig, MemStore, Role};
+use crate::engine::{
+    BootState, CallFailure, CallOptions, Engine, EngineConfig, MemStore, RateLimit, Role,
+};
 use crate::message::{Confirmed, NoResponse, Request, Unconfirmed};
 use crate::types::Identity;
 use crate::version::{Subprotocol, Version};
 
 use super::TransportError;
 use super::connection::{
-    BoxFuture, Driver, Handle, Handler, Keepalive, SessionContext, SessionState, Shared,
+    BoxFuture, DisconnectReason, Driver, Handle, Handler, Keepalive, SessionContext, SessionState,
+    Shared,
 };
 use super::security::{Credentials, SecurityProfile};
 use super::stream::MaybeTls;
@@ -47,7 +50,16 @@ pub struct Auth {
     pub credentials: Credentials,
     /// Where it connected from.
     pub remote: SocketAddr,
-    /// Which profile the connection is using, derived from the transport and the credentials.
+    /// Which profile *this connection* is using, derived from what it presented: a verified
+    /// client certificate is profile 3, TLS without one profile 2, plain HTTP with Basic
+    /// credentials profile 1. Never the listener's configuration.
+    ///
+    /// On a listener built with
+    /// [`ServerTls::with_optional_client_auth`](super::ServerTls::with_optional_client_auth),
+    /// comparing this with the profile the station is provisioned for is **the
+    /// authenticator's job**: A00.FR.002 makes the CSMS terminate a station that connects
+    /// with a different profile, and only the CSMS's records know which one that is. See
+    /// [`Authenticator`].
     pub profile: SecurityProfile,
     /// The full request path, for multi-tenant deployments.
     pub path: String,
@@ -81,6 +93,44 @@ impl AuthOutcome {
 }
 
 /// Decides whether a Charging Station may connect.
+///
+/// It runs after the TLS handshake (so a client certificate, when there is one, has already
+/// been verified against the listener's roots) and after the Basic username has been checked
+/// against the identity in the URL (A00.FR.204/207). What is left is the CSMS's own records:
+/// is this station provisioned, are these its credentials, and — on a listener that accepts
+/// profile 2 and 3 alike — is this the profile it is provisioned for (A00.FR.002).
+///
+/// ```
+/// use ocpp_kit::transport::{Auth, AuthOutcome, BasicAuthPassword, Credentials, SecurityProfile};
+///
+/// struct Provisioned { profile: SecurityProfile, password: Option<BasicAuthPassword> }
+///
+/// fn lookup(_identity: &str) -> Option<Provisioned> {
+///     Some(Provisioned { profile: SecurityProfile::TlsClientCertificate, password: None })
+/// }
+///
+/// async fn authenticate(auth: Auth) -> AuthOutcome {
+///     let Some(station) = lookup(auth.identity.as_str()) else {
+///         return AuthOutcome::Unknown;
+///     };
+///     // A00.FR.002: one profile per station. Without this line, a leaked Basic password
+///     // downgrades a profile-3 station to profile 2 on a mixed listener.
+///     if auth.profile != station.profile {
+///         return AuthOutcome::Reject;
+///     }
+///     match (&auth.credentials, &station.password) {
+///         // The certificate chain was verified by TLS; bind it to this station here
+///         // (A00.FR.405: its CN carries the station's serial number).
+///         (Credentials::ClientCertificate { .. }, None) => AuthOutcome::accept(),
+///         // Constant time, and the username was already checked against the URL.
+///         (Credentials::Basic { password, .. }, Some(expected)) if expected.verify(password) => {
+///             AuthOutcome::accept()
+///         }
+///         _ => AuthOutcome::Reject,
+///     }
+/// }
+/// # let _ = authenticate;
+/// ```
 pub trait Authenticator: Send + Sync + 'static {
     /// Runs one authentication.
     fn authenticate(&self, auth: Auth) -> BoxFuture<'_, AuthOutcome>;
@@ -127,8 +177,21 @@ pub enum SessionEvent {
     Closed {
         /// Which station.
         identity: Identity,
-        /// Why.
-        reason: String,
+        /// Why — [`DisconnectReason::Idle`] for the
+        /// [`idle_timeout`](CsmsBuilder::idle_timeout), [`DisconnectReason::PongTimeout`] for
+        /// keepalive, and so on.
+        reason: DisconnectReason,
+    },
+    /// A station went over the [`message_rate`](CsmsBuilder::message_rate): its calls are
+    /// being answered `SecurityError` and everything else it sends is dropped.
+    ///
+    /// Once per episode — the first refusal after a message that was admitted — so a flood
+    /// cannot crowd lifecycle events out of this stream. Disconnecting or blocking the
+    /// station is the CSMS's call:
+    /// `handle.session(&identity).await.map(|s| s.shutdown(deadline))`.
+    RateLimited {
+        /// Which station.
+        identity: Identity,
     },
     /// A station reconnected while an older session was still open; the older one was closed.
     Superseded {
@@ -188,6 +251,8 @@ pub struct CsmsBuilder {
     compression: bool,
     supersede: bool,
     supersede_drain: Duration,
+    message_rate: Option<RateLimit>,
+    idle_timeout: Option<Duration>,
 }
 
 impl Default for CsmsBuilder {
@@ -211,6 +276,8 @@ impl Default for CsmsBuilder {
             compression: true,
             supersede: true,
             supersede_drain: Duration::from_secs(5),
+            message_rate: None,
+            idle_timeout: None,
         }
     }
 }
@@ -232,8 +299,9 @@ impl CsmsBuilder {
         self
     }
 
-    /// Serves TLS — security profile 2, or profile 3 when the configuration demands a
-    /// client certificate.
+    /// Serves TLS — security profile 2, profile 3 when the configuration demands a client
+    /// certificate, or either per station when it accepts one optionally. See
+    /// [`ServerTls`](super::ServerTls).
     #[cfg(feature = "rustls")]
     #[must_use]
     pub fn tls(mut self, tls: super::tls::ServerTls) -> Self {
@@ -348,6 +416,53 @@ impl CsmsBuilder {
         self
     }
 
+    /// How often each station may send unprompted messages. Off by default.
+    ///
+    /// OCPP sets no rate, and the other bounds here limit how much is in flight, not how
+    /// often: without this, an authenticated station reaches the handler — and its database
+    /// — as fast as its socket allows. A call over the rate is answered `CALLERROR`
+    /// `SecurityError` before the handler runs; a `SEND`, a malformed frame or an answer to
+    /// nothing is dropped. Answers to the CSMS's own calls are never counted.
+    /// [`SessionEvent::RateLimited`] reports each episode.
+    ///
+    /// Each connection starts with a full burst. Size the burst for what a station sends
+    /// unprompted at boot — one `StatusNotification` per connector at least — and the rate
+    /// well above the busiest conforming traffic you expect (meter values during charging),
+    /// because a refused `TransactionEvent` is retried, not lost, but it is late.
+    ///
+    /// ```no_run
+    /// # use ocpp_kit::{engine::RateLimit, transport::{Csms, AcceptEveryStation}};
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let csms = Csms::builder()
+    ///     .bind("0.0.0.0:9000".parse()?)
+    ///     .authenticate(AcceptEveryStation)
+    ///     .message_rate(RateLimit::per_minute(120)?.with_burst(30)?)
+    ///     .build()?;
+    /// # Ok(()) }
+    /// ```
+    #[must_use]
+    pub fn message_rate(mut self, rate: RateLimit) -> Self {
+        self.message_rate = Some(rate);
+        self
+    }
+
+    /// Closes a session that has received no OCPP message for this long. Off by default.
+    ///
+    /// Keepalive ends a session whose *pongs* stop; a peer that answers pings but never speaks
+    /// OCPP would hold its connection slot, and its identity, for ever. Any received message
+    /// counts as activity (G02.FR.04); pings and pongs do not, because they prove only the
+    /// path to the next hop (Part 4 §5.3).
+    ///
+    /// Set it comfortably above the `HeartbeatInterval` you hand out in
+    /// `BootNotificationResponse`: G02.FR.02 makes a conforming station send a `Heartbeat`
+    /// after that much inactivity, so three intervals tolerate two lost ones. The session ends
+    /// with [`DisconnectReason::Idle`].
+    #[must_use]
+    pub fn idle_timeout(mut self, timeout: Duration) -> Self {
+        self.idle_timeout = Some(timeout);
+        self
+    }
+
     /// Whether a new connection closes an existing session for the same identity.
     ///
     /// On by default: a station that reconnects after a network partition would otherwise be
@@ -397,6 +512,8 @@ impl CsmsBuilder {
             compression: self.compression,
             supersede: self.supersede,
             supersede_drain: self.supersede_drain,
+            message_rate: self.message_rate,
+            idle_timeout: self.idle_timeout,
             router: Arc::new(Router::default()),
             events: broadcast::channel(1024).0,
         })
@@ -447,6 +564,8 @@ pub struct Csms {
     compression: bool,
     supersede: bool,
     supersede_drain: Duration,
+    message_rate: Option<RateLimit>,
+    idle_timeout: Option<Duration>,
     router: Arc<Router>,
     events: broadcast::Sender<SessionEvent>,
 }
@@ -739,11 +858,15 @@ impl Csms {
             .unwrap_or_else(|| EngineConfig::new(Role::Csms, version));
         config.role = Role::Csms;
         config.version = version;
+        if self.message_rate.is_some() {
+            config.inbound_rate = self.message_rate;
+        }
 
         let Ok(engine) = Engine::with_store(config, MemStore::new()) else {
             return;
         };
         let mut driver = Driver::new(engine, shared.clone(), self.handler.clone(), state_tx);
+        driver.idle_timeout = self.idle_timeout;
 
         let session_id = self.router.next_session_id();
 
@@ -787,14 +910,10 @@ impl Csms {
         let session_identity = identity.clone();
         let keepalive = self.keepalive;
         let task = tokio::spawn(async move {
-            let outcome = driver
+            let reason = driver
                 .run(socket, &mut commands_rx, version, keepalive)
                 .await;
             driver.abandon(&CallFailure::Disconnected);
-            let reason = match outcome {
-                super::connection::Ended::Disconnected(reason) => reason,
-                super::connection::Ended::Closed(why) => format!("{why:?}"),
-            };
             {
                 // Remove *this* session, not whichever one holds the identity now: a
                 // superseded session finishing must not evict the successor that replaced it,
@@ -920,7 +1039,7 @@ impl CsmsHandle {
     }
 }
 
-/// Lifts what an operator watches across a fleet — violations and repairs — from one
+/// Lifts what an operator watches across a fleet — violations, repairs, rate limiting — from one
 /// session's channel onto the CSMS-wide stream, tagged with the station.
 fn lift_to_fleet(
     mut session_events: broadcast::Receiver<super::Event>,
@@ -948,6 +1067,9 @@ fn lift_to_fleet(
                     action,
                     id,
                     repairs,
+                },
+                super::Event::RateLimited => SessionEvent::RateLimited {
+                    identity: identity.clone(),
                 },
                 _ => continue,
             };

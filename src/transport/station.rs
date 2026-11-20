@@ -16,7 +16,7 @@ use crate::types::Identity;
 use crate::version::{Subprotocol, Version};
 
 use super::TransportError;
-use super::connection::{Driver, Ended, Event, Handle, Handler, Keepalive, SessionState, Shared};
+use super::connection::{Driver, Event, Handle, Handler, Keepalive, SessionState, Shared};
 use super::network_profile::{NetworkProfile, NetworkProfiles, ProfileCycler};
 use super::security::{BasicAuthPassword, SecurityProfile, basic_auth_header};
 use super::stream::MaybeTls;
@@ -480,14 +480,12 @@ impl<S: MessageStore + Send + 'static> Station<S> {
                         let ended = driver
                             .run(socket, &mut commands_rx, version, keepalive)
                             .await;
-                        if matches!(ended, Ended::Closed(_)) || !reconnect {
+                        if ended.is_requested() || !reconnect {
                             driver.abandon(&CallFailure::Disconnected);
                             return Ok(());
                         }
                         #[cfg(feature = "tracing")]
-                        if let Ended::Disconnected(reason) = &ended {
-                            tracing::info!(%reason, slot, "the session ended; reconnecting");
-                        }
+                        tracing::info!(reason = %ended, slot, "the session ended; reconnecting");
                     }
                     Err(error) => {
                         if !reconnect {

@@ -25,8 +25,9 @@ use ocpp_kit::engine::{
     Engine, EngineConfig, HeartbeatPolicy, Input, Instant, MemStore, MessageStore, OfflinePolicy,
     Output, RetryPolicy, Role,
 };
-use ocpp_kit::station::smart_charging::{
-    Period, Profile, ProfileKind, ProfileStore, Purpose, RateUnit, Schedule,
+use ocpp_kit::smart_charging::{
+    Ceiling, ChargingPlan, Period, Profile, ProfileKind, ProfileStore, Purpose, RateUnit,
+    RateUnits, Schedule, StationLimits, Supply, Target,
 };
 use ocpp_kit::types::{DateTime, Decimal, Identity};
 use ocpp_kit::{RawValue, Version};
@@ -523,6 +524,102 @@ fn a_composite_schedule_agrees_with_the_stacking_rules_evaluated_directly() {
             assert!(
                 pair[0].limit != pair[1].limit || pair[0].number_phases != pair[1].number_phases,
                 "seed {seed}: consecutive steps must differ"
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A plan's ceiling stays a ceiling (ChargingPlan::to_profile)
+// ---------------------------------------------------------------------------
+
+/// A limit in watts: W as it stands, A × 230 V × phases (3 when unstated, K01.FR.49).
+fn watts(limit: Decimal, unit: RateUnit, phases: Option<i32>) -> Decimal {
+    match unit {
+        RateUnit::W => limit,
+        RateUnit::A => limit
+            .checked_mul(Decimal::from(230 * i64::from(phases.unwrap_or(3))))
+            .unwrap(),
+    }
+}
+
+/// Whatever the plan and whatever the station allows, the converted profile is at or below
+/// the plan at every second — in power, and in current when both are in amperes — and has the
+/// shape block K requires.
+#[test]
+fn a_converted_plan_never_exceeds_the_plan() {
+    let start: DateTime = "2026-11-20T00:00:00Z".parse().unwrap();
+    for seed in 0..CASES {
+        let mut rng = Rng::new(seed);
+        let slots = 1 + rng.below(200);
+        let slot = [60u64, 300, 900][rng.below(3)];
+        let ceilings: Vec<Ceiling> = (0..slots)
+            .map(|_| {
+                let ceiling = if rng.below(2) == 0 {
+                    Ceiling::watts(Decimal::from(rng.below(22_001) as i64))
+                } else {
+                    // Amperes with a decimal: 0.0–32.0 A.
+                    Ceiling::amperes(Decimal::new(rng.below(321) as i64, 1))
+                };
+                match rng.below(4) {
+                    0 => ceiling,
+                    n => ceiling.phases(n as u8),
+                }
+            })
+            .collect();
+        let plan =
+            ChargingPlan::new(start, std::time::Duration::from_secs(slot), ceilings).unwrap();
+        let units = match rng.below(3) {
+            0 => RateUnits::parse_v2("A"),
+            1 => RateUnits::parse_v2("W"),
+            _ => RateUnits::BOTH,
+        };
+        let limits = StationLimits::new(1 + rng.below(48), 3, units);
+        let planned = plan
+            .to_profile(
+                1,
+                1,
+                Target::transaction(1, "tx"),
+                &limits,
+                Supply::default(),
+            )
+            .unwrap_or_else(|error| panic!("seed {seed}: {error}"));
+
+        let schedule = &planned.profile.schedules[0];
+        assert!(schedule.periods.len() <= limits.max_periods, "seed {seed}");
+        assert_eq!(
+            schedule.periods[0].start_period, 0,
+            "seed {seed}: K01.FR.31"
+        );
+        assert!(
+            schedule
+                .periods
+                .windows(2)
+                .all(|w| w[0].start_period < w[1].start_period),
+            "seed {seed}: K01.FR.35"
+        );
+        assert!(
+            (units.amperes && schedule.rate_unit == RateUnit::A)
+                || (units.watts && schedule.rate_unit == RateUnit::W),
+            "seed {seed}: K01.FR.26"
+        );
+        assert!(schedule.periods.iter().all(|p| p.phase_to_use.is_none()));
+
+        for second in (0..plan.duration()).step_by(30) {
+            let wanted = plan.ceiling_at(second).unwrap();
+            let got = schedule.period_at(second).unwrap();
+            let wanted_phases = wanted.phases.map(i32::from);
+            assert!(
+                watts(got.limit, schedule.rate_unit, got.number_phases)
+                    <= watts(wanted.limit, wanted.unit, wanted_phases),
+                "seed {seed} at {second}s: {got:?} above {wanted:?}"
+            );
+            if schedule.rate_unit == RateUnit::A && wanted.unit == RateUnit::A {
+                assert!(got.limit <= wanted.limit, "seed {seed} at {second}s");
+            }
+            assert!(
+                got.number_phases.unwrap_or(3) <= wanted_phases.unwrap_or(3),
+                "seed {seed} at {second}s: more phases than planned"
             );
         }
     }

@@ -118,11 +118,15 @@ pub enum Event {
     },
     /// The connection ended.
     Disconnected {
-        /// Why, for logging.
-        reason: String,
-        /// The close frame the peer sent, when it sent one — its code and reason, verbatim.
-        peer_close: Option<CloseFrame>,
+        /// Why — match on it, or `Display` it for a log line.
+        reason: DisconnectReason,
     },
+    /// The peer went over its [`RateLimit`](crate::engine::RateLimit): what it sends is being
+    /// refused.
+    ///
+    /// Once per *episode* — the first refused message after one that was admitted — so a
+    /// flood cannot also flood the event stream.
+    RateLimited,
     /// The boot state machine moved.
     BootState(BootState),
     /// A `currentTime` was observed in a `BootNotificationResponse` or `HeartbeatResponse`.
@@ -647,12 +651,84 @@ impl Handle {
 // The driver loop
 // ---------------------------------------------------------------------------
 
-/// How a session run ended.
-pub(crate) enum Ended {
-    /// The peer or the network closed it; a station should reconnect.
-    Disconnected(String),
-    /// The engine asked for the connection to close.
+/// Why one connection of a session ended.
+///
+/// Every case but [`Closed`](Self::Closed) is something that happened *to* the session; a
+/// Charging Station reconnects after those (Part 4 §5.4) and stops only after `Closed`, which
+/// the application asked for.
+///
+/// `Display` renders one line for a log, with the peer's own text escaped — a close reason is
+/// whatever the peer chose to send, and must not be able to forge a second log line.
+///
+/// ```
+/// # use std::time::Duration;
+/// # use ocpp_kit::transport::{CloseCode, CloseFrame, DisconnectReason};
+/// let reason = DisconnectReason::PeerClosed(Some(CloseFrame::new(CloseCode::NORMAL, "bye\r\nok")));
+/// assert_eq!(reason.to_string(), r"peer closed: 1000 bye\r\nok");
+/// assert_eq!(DisconnectReason::Idle(Duration::from_secs(600)).to_string(),
+///            "no OCPP message for 600s");
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DisconnectReason {
+    /// The engine closed it: a drain finished or ran out of time, or the application asked.
     Closed(CloseReason),
+    /// The peer sent a WebSocket close frame — its code and reason verbatim, when it gave one.
+    PeerClosed(Option<CloseFrame>),
+    /// A WebSocket ping went unanswered for this long (Part 4 §5.3).
+    PongTimeout(Duration),
+    /// No OCPP message arrived for this long — the CSMS's idle timeout.
+    Idle(Duration),
+    /// The socket failed, or ended without a close frame.
+    Transport(String),
+}
+
+impl DisconnectReason {
+    /// Whether the application asked for this — the one reason a Charging Station does not
+    /// reconnect after.
+    #[must_use]
+    pub const fn is_requested(&self) -> bool {
+        matches!(self, Self::Closed(_))
+    }
+}
+
+impl fmt::Display for DisconnectReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Closed(CloseReason::Drained) => f.write_str("drained"),
+            Self::Closed(CloseReason::DrainTimedOut) => f.write_str("drain timed out"),
+            Self::Closed(CloseReason::Requested) => f.write_str("closed on request"),
+            Self::PeerClosed(None) => f.write_str("peer closed"),
+            Self::PeerClosed(Some(frame)) if frame.reason.is_empty() => {
+                write!(f, "peer closed: {}", frame.code)
+            }
+            Self::PeerClosed(Some(frame)) => {
+                write!(f, "peer closed: {} {}", frame.code, Escaped(&frame.reason))
+            }
+            Self::PongTimeout(after) => {
+                write!(f, "no pong within {}s of a WebSocket ping", after.as_secs())
+            }
+            Self::Idle(after) => write!(f, "no OCPP message for {}s", after.as_secs()),
+            Self::Transport(error) => write!(f, "transport: {}", Escaped(error)),
+        }
+    }
+}
+
+/// Renders text a peer chose with every control character escaped, so it stays on one line.
+struct Escaped<'a>(&'a str);
+
+impl fmt::Display for Escaped<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use fmt::Write as _;
+        for c in self.0.chars() {
+            if c.is_control() {
+                write!(f, "{}", c.escape_debug())?;
+            } else {
+                f.write_char(c)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 pub(crate) struct Driver<S: MessageStore> {
@@ -668,10 +744,13 @@ pub(crate) struct Driver<S: MessageStore> {
     /// The engine already caps the peer's unanswered calls; this caps the *work* they can
     /// start, so one talkative station cannot occupy the runtime on behalf of the rest.
     slots: Arc<Semaphore>,
-    /// The close frame the peer sent on the current connection, for `Event::Disconnected`.
-    peer_close: Option<CloseFrame>,
     /// How often to adopt what another process added to the store; `None` never.
     pub store_poll: Option<Duration>,
+    /// How long the peer may go without sending an OCPP message; `None` for ever.
+    ///
+    /// Measured on text messages only: a pong proves the TCP path, not that the peer speaks
+    /// OCPP (Part 4 §5.3), and G02.FR.04 makes *any* received message proof of availability.
+    pub idle_timeout: Option<Duration>,
 }
 
 /// How the driver watches for a connection that has died without saying so.
@@ -739,8 +818,8 @@ impl<S: MessageStore> Driver<S> {
             pending: HashMap::new(),
             timers: BTreeMap::new(),
             slots: Arc::new(Semaphore::new(MAX_CONCURRENT_HANDLERS)),
-            peer_close: None,
             store_poll: None,
+            idle_timeout: None,
         }
     }
 
@@ -770,13 +849,12 @@ impl<S: MessageStore> Driver<S> {
         commands: &mut mpsc::Receiver<Command>,
         version: Version,
         keepalive: Keepalive,
-    ) -> Ended
+    ) -> DisconnectReason
     where
         St: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
     {
         let compressed = socket.codec().is_compressed();
         let (mut sink, mut stream) = socket.split();
-        self.peer_close = None;
 
         self.engine.handle(self.now(), Input::Connected { version });
         if self.store_poll.is_some() {
@@ -801,6 +879,9 @@ impl<S: MessageStore> Driver<S> {
         });
         // `Some` while a ping is outstanding: the deadline by which a pong must arrive.
         let mut pong_due: Option<tokio::time::Instant> = None;
+        // The deadline by which the peer must have said something in OCPP.
+        let idle_timeout = self.idle_timeout;
+        let mut idle_due = idle_timeout.map(|idle| tokio::time::Instant::now() + idle);
 
         // Every failure inside the loop ends this *connection*, never the driver: the engine
         // has to be told the socket is gone so it can fail or requeue what was outstanding,
@@ -811,7 +892,7 @@ impl<S: MessageStore> Driver<S> {
             match self.flush(&mut sink).await {
                 Ok(Some(outcome)) => break outcome,
                 Ok(None) => {}
-                Err(error) => break Ended::Disconnected(error.to_string()),
+                Err(error) => break DisconnectReason::Transport(error.to_string()),
             }
 
             let sleep = self.next_deadline();
@@ -821,7 +902,7 @@ impl<S: MessageStore> Driver<S> {
                 command = commands.recv() => {
                     match command {
                         Some(command) => self.apply(command),
-                        None => break Ended::Closed(CloseReason::Requested),
+                        None => break DisconnectReason::Closed(CloseReason::Requested),
                     }
                 }
 
@@ -830,6 +911,9 @@ impl<S: MessageStore> Driver<S> {
                     // payload to match, and some peers do not echo it.
                     if matches!(message, Some(Ok(Message::Pong(_)))) {
                         pong_due = None;
+                    }
+                    if let (Some(Ok(Message::Text(_))), Some(idle)) = (&message, idle_timeout) {
+                        idle_due = Some(tokio::time::Instant::now() + idle);
                     }
                     if let Some(ended) = self.on_message(message, &mut sink).await {
                         break ended;
@@ -847,7 +931,7 @@ impl<S: MessageStore> Driver<S> {
                         pong_due = Some(tokio::time::Instant::now() + keepalive.timeout);
                     }
                     if let Err(error) = sink.send(Message::Ping(Vec::new())).await {
-                        break Ended::Disconnected(error.to_string());
+                        break DisconnectReason::Transport(error.to_string());
                     }
                 }
 
@@ -862,29 +946,33 @@ impl<S: MessageStore> Driver<S> {
                 () = async { tokio::time::sleep_until(pong_due.expect("checked")).await },
                     if pong_due.is_some() =>
                 {
-                    break Ended::Disconnected(format!(
-                        "no pong within {:?} of a WebSocket ping",
-                        keepalive.timeout
-                    ));
+                    break DisconnectReason::PongTimeout(keepalive.timeout);
+                }
+
+                // The CSMS's idle timeout: a peer that keeps answering pings but never speaks
+                // OCPP holds a connection slot, and its identity, for nothing.
+                () = async { tokio::time::sleep_until(idle_due.expect("checked")).await },
+                    if idle_due.is_some() =>
+                {
+                    break DisconnectReason::Idle(idle_timeout.unwrap_or_default());
                 }
             }
         };
 
         self.engine.handle(self.now(), Input::Disconnected);
         let _ = self.flush(&mut sink).await;
-        let reason = match &ended {
-            Ended::Disconnected(reason) => reason.clone(),
-            Ended::Closed(why) => format!("{why:?}"),
-        };
         self.publish(false, version);
         let _ = self.shared.events.send(Event::Disconnected {
-            reason,
-            peer_close: self.peer_close.take(),
+            reason: ended.clone(),
         });
-        if matches!(ended, Ended::Closed(_)) {
-            let _ = sink
-                .send(Message::Close(Some(CloseFrame::new(CloseCode::NORMAL, ""))))
-                .await;
+        // Our own close frame: ours to send when the engine or an idle timeout ended it.
+        let close = match &ended {
+            DisconnectReason::Closed(_) => Some(CloseFrame::new(CloseCode::NORMAL, "")),
+            DisconnectReason::Idle(_) => Some(CloseFrame::new(CloseCode::POLICY, "idle")),
+            _ => None,
+        };
+        if let Some(frame) = close {
+            let _ = sink.send(Message::Close(Some(frame))).await;
         }
         let _ = sink.close().await;
         ended
@@ -895,7 +983,7 @@ impl<S: MessageStore> Driver<S> {
         &mut self,
         message: Option<Result<Message, WsError>>,
         sink: &mut Si,
-    ) -> Option<Ended>
+    ) -> Option<DisconnectReason>
     where
         Si: futures_util::Sink<Message, Error = WsError> + Unpin,
     {
@@ -909,21 +997,16 @@ impl<S: MessageStore> Driver<S> {
                 sink.send(Message::Pong(payload))
                     .await
                     .err()
-                    .map(|error| Ended::Disconnected(error.to_string()))
+                    .map(|error| DisconnectReason::Transport(error.to_string()))
             }
             // Part 4 §4.1: OCPP-J is text-only. A binary frame — and a pong, already
             // accounted for by the caller — is ignored rather than treated as fatal.
             Some(Ok(Message::Pong(_) | Message::Binary(_))) => None,
             Some(Ok(Message::Close(frame))) => {
-                let reason = frame.as_ref().map_or_else(
-                    || "peer closed".to_owned(),
-                    |frame| format!("peer closed: {} {}", frame.code, frame.reason),
-                );
                 // §5.5.1: echo the close, then stop.
                 let echo = frame.as_ref().map(|frame| CloseFrame::new(frame.code, ""));
-                self.peer_close = frame;
                 let _ = sink.send(Message::Close(echo)).await;
-                Some(Ended::Disconnected(reason))
+                Some(DisconnectReason::PeerClosed(frame))
             }
             Some(Err(error)) => {
                 // A protocol error deserves the close code RFC 6455 assigns it, so the peer
@@ -936,9 +1019,9 @@ impl<S: MessageStore> Driver<S> {
                         ))))
                         .await;
                 }
-                Some(Ended::Disconnected(error.to_string()))
+                Some(DisconnectReason::Transport(error.to_string()))
             }
-            None => Some(Ended::Disconnected("stream ended".to_owned())),
+            None => Some(DisconnectReason::Transport("stream ended".to_owned())),
         }
     }
 
@@ -998,7 +1081,7 @@ impl<S: MessageStore> Driver<S> {
     /// Drains the engine's outputs, writing frames and spawning handler tasks.
     ///
     /// Returns `Some` when the engine asked for the connection to close.
-    async fn flush<Si>(&mut self, sink: &mut Si) -> Result<Option<Ended>, TransportError>
+    async fn flush<Si>(&mut self, sink: &mut Si) -> Result<Option<DisconnectReason>, TransportError>
     where
         Si: futures_util::Sink<Message, Error = WsError> + Unpin,
     {
@@ -1035,7 +1118,10 @@ impl<S: MessageStore> Driver<S> {
                 Output::Violation(violation) => {
                     let _ = self.shared.events.send(Event::Violation(violation));
                 }
-                Output::Close(reason) => close = Some(Ended::Closed(reason)),
+                Output::Close(reason) => close = Some(DisconnectReason::Closed(reason)),
+                Output::RateLimited => {
+                    let _ = self.shared.events.send(Event::RateLimited);
+                }
             }
         }
         if wrote {

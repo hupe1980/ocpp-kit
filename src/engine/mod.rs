@@ -58,6 +58,7 @@
 
 mod backoff;
 mod queue;
+mod rate;
 #[cfg(feature = "std")]
 mod store_file;
 mod time;
@@ -81,6 +82,7 @@ use crate::version::Version;
 
 pub use backoff::{Backoff, Jitter};
 pub use queue::{MemStore, MessageStore, QueuedCall, RetryPolicy, Seq, StoreError};
+pub use rate::{InvalidRateLimit, RateLimit};
 #[cfg(feature = "std")]
 pub use store_file::FileStore;
 pub use time::{Instant, Timer};
@@ -199,6 +201,15 @@ pub struct EngineConfig {
     /// handler tasks, without limit. Beyond this many the extra call is answered
     /// `ProtocolError` regardless of [`InboundConcurrency`].
     pub max_peer_requests: usize,
+    /// How often the peer may send unprompted messages; `None` (the default) for no limit.
+    ///
+    /// Counted: every `CALL`, `SEND`, malformed frame and answer to a call that is not
+    /// outstanding. Never counted: answers to our own outstanding call, whose rate is ours.
+    /// Over the rate, a `CALL` is answered `SecurityError` before any other check — it never
+    /// becomes an [`Output::Request`] or an in-flight call — and everything else is dropped
+    /// without an answer or a violation, because answering a flood is what it is for.
+    /// [`Output::RateLimited`] reports the first refusal of each run.
+    pub inbound_rate: Option<RateLimit>,
 }
 
 impl EngineConfig {
@@ -217,6 +228,7 @@ impl EngineConfig {
             enforce_boot_gate: true,
             boot_retry_fallback: Duration::from_secs(30),
             max_peer_requests: 64,
+            inbound_rate: None,
         }
     }
 
@@ -245,6 +257,14 @@ impl EngineConfig {
     #[must_use]
     pub const fn with_heartbeat(mut self, heartbeat: HeartbeatPolicy) -> Self {
         self.heartbeat = heartbeat;
+        self
+    }
+
+    /// Limits how often the peer may send unprompted messages. See
+    /// [`inbound_rate`](Self::inbound_rate).
+    #[must_use]
+    pub const fn with_inbound_rate(mut self, rate: RateLimit) -> Self {
+        self.inbound_rate = Some(rate);
         self
     }
 
@@ -573,6 +593,10 @@ pub enum Output {
     ClockSample(ClockSample),
     /// The peer misbehaved. Never fatal by itself; log it and carry on.
     Violation(ProtocolViolation),
+    /// The peer went over [`EngineConfig::inbound_rate`] and is being refused.
+    ///
+    /// Once per run of refusals: the next one comes only after a message was admitted again.
+    RateLimited,
     /// Close the connection.
     Close(CloseReason),
 }
@@ -729,6 +753,9 @@ pub struct Engine<S: MessageStore = MemStore> {
     draining: Option<Instant>,
     boot_retry_at: Option<Instant>,
     heartbeat_at: Option<Instant>,
+    /// The inbound rate limiter, when one is configured. Its state lives as long as the
+    /// engine — one connection on a CSMS, which builds an engine per session.
+    rate: Option<rate::Gcra>,
 }
 
 impl Engine<MemStore> {
@@ -746,6 +773,7 @@ impl<S: MessageStore> Engine<S> {
     /// replays the transaction messages a power cut interrupted.
     pub fn with_store(config: EngineConfig, store: S) -> Result<Self, StoreError> {
         let version = config.version;
+        let rate = config.inbound_rate.map(rate::Gcra::new);
         let mut engine = Self {
             config,
             store,
@@ -764,6 +792,7 @@ impl<S: MessageStore> Engine<S> {
             draining: None,
             boot_retry_at: None,
             heartbeat_at: None,
+            rate,
         };
         for (seq, entry) in engine.store.pending()? {
             let pending = engine.stored(seq, entry);
@@ -1285,6 +1314,9 @@ impl<S: MessageStore> Engine<S> {
         let frame = match Frame::parse(text, self.version) {
             Ok(frame) => frame,
             Err(error) => {
+                if self.over_rate() {
+                    return;
+                }
                 let reply = error.reply(self.version);
                 let reply_id = error.reply_id();
                 let code = error.error_code();
@@ -1315,6 +1347,33 @@ impl<S: MessageStore> Engine<S> {
                 return;
             }
         };
+
+        // The answer to our own outstanding call is paced by us, so it is never counted.
+        // Everything else the peer sends is.
+        let expected = matches!(frame, Frame::CallResult { .. } | Frame::CallError { .. })
+            && self
+                .inflight
+                .as_ref()
+                .is_some_and(|inflight| &inflight.id == frame.id());
+        if !expected && self.over_rate() {
+            // Before every other inbound check: a refused call must cost nothing but this
+            // answer, and must not occupy an in-flight slot. A SEND is never answered (FR.07);
+            // anything else is dropped without an answer or a violation.
+            if let Frame::Call { id, .. } = &frame {
+                let refusal = Frame::CallError {
+                    id: id.clone(),
+                    error: CallError::security(format!(
+                        "message rate exceeded ({})",
+                        self.config
+                            .inbound_rate
+                            .map_or_else(String::new, |rate| rate.to_string())
+                    ))
+                    .into(),
+                };
+                self.transmit(&refusal);
+            }
+            return;
+        }
 
         if !frame.id().is_conforming() {
             self.outputs.push_back(Output::Violation(
@@ -1554,6 +1613,20 @@ impl<S: MessageStore> Engine<S> {
             return Ok(());
         }
         Err(EngineError::NoSuchRequest(id.clone()))
+    }
+
+    /// Counts one unprompted message against the inbound rate. `true` when it is refused.
+    fn over_rate(&mut self) -> bool {
+        let now = self.now;
+        match self.rate.as_mut().map(|rate| rate.admit(now)) {
+            Some(rate::Admission::Refused { new_episode }) => {
+                if new_episode {
+                    self.outputs.push_back(Output::RateLimited);
+                }
+                true
+            }
+            Some(rate::Admission::Admitted) | None => false,
+        }
     }
 
     fn reject(&mut self, id: &MessageId, kind: MessageKind, error: CallError) {

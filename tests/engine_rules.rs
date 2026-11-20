@@ -7,7 +7,7 @@ use ocpp_kit::Version;
 use ocpp_kit::engine::{
     BootState, CallFailure, CallOptions, CloseReason, Engine, EngineConfig, EngineError,
     HeartbeatPolicy, InboundConcurrency, Input, Instant, MemStore, MessageStore, OfflinePolicy,
-    Output, ProtocolViolation, RetryPolicy, Role, Timer,
+    Output, ProtocolViolation, RateLimit, RetryPolicy, Role, Timer,
 };
 use ocpp_kit::message::MessageKind;
 use ocpp_kit::rpc::ErrorCode;
@@ -1756,4 +1756,196 @@ fn nothing_is_adopted_while_a_shutdown_drains() {
         2,
         "it stays durable for the next start"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The inbound message rate (EngineConfig::inbound_rate)
+// ---------------------------------------------------------------------------
+
+/// A connected 2.1 CSMS engine with `rate`.
+fn rate_limited_csms(rate: RateLimit) -> Engine<MemStore> {
+    let mut csms =
+        Engine::new(EngineConfig::new(Role::Csms, Version::V2_1).with_inbound_rate(rate));
+    csms.handle(
+        NOW,
+        Input::Connected {
+            version: Version::V2_1,
+        },
+    );
+    let _ = csms.drain();
+    csms
+}
+
+fn rate_limited(outputs: &[Output]) -> usize {
+    outputs
+        .iter()
+        .filter(|output| matches!(output, Output::RateLimited))
+        .count()
+}
+
+/// Feeds one `Heartbeat` CALL and answers it, so the one-outstanding rule stays out of the way.
+fn heartbeat(csms: &mut Engine<MemStore>, at: Instant, id: &str, recorder: &mut Recorder) {
+    csms.handle(
+        at,
+        Input::Received(&format!(r#"[2,"{id}","Heartbeat",{{}}]"#)),
+    );
+    recorder.drain(csms);
+    if !recorder.requests().is_empty() {
+        csms.respond(
+            at,
+            &id.parse().unwrap(),
+            &raw(r#"{"currentTime":"2024-01-01T00:00:00Z"}"#),
+        )
+        .unwrap();
+        let _ = csms.drain();
+    }
+}
+
+#[test]
+fn over_the_rate_a_call_is_answered_security_error_before_the_handler() {
+    let mut csms = rate_limited_csms(RateLimit::per_minute(60).unwrap().with_burst(5).unwrap());
+    let mut recorder = Recorder::new();
+
+    for n in 0..5 {
+        heartbeat(&mut csms, NOW, &format!("h{n}"), &mut recorder);
+        assert_eq!(recorder.requests().len(), 1, "call {n} is within the burst");
+    }
+
+    csms.handle(NOW, Input::Received(r#"[2,"h5","Heartbeat",{}]"#));
+    recorder.drain(&mut csms);
+    assert!(recorder.requests().is_empty(), "the handler never sees it");
+    let refusal = recorder.only_frame();
+    assert!(
+        refusal
+            .starts_with(r#"[4,"h5","SecurityError","message rate exceeded (60/min (burst 5))""#),
+        "{refusal}"
+    );
+    assert_eq!(rate_limited(recorder.outputs()), 1);
+    assert!(
+        recorder.violations().is_empty(),
+        "{:?}",
+        recorder.violations()
+    );
+    // It never became an in-flight call of the peer's.
+    assert_eq!(csms.awaiting_response(), 0);
+
+    // One interval later the station is served again — and not as a concurrent call.
+    let later = Instant::from_millis(1000);
+    heartbeat(&mut csms, later, "h6", &mut recorder);
+    assert_eq!(recorder.requests().len(), 1);
+    assert!(
+        recorder.violations().is_empty(),
+        "{:?}",
+        recorder.violations()
+    );
+}
+
+#[test]
+fn a_flood_is_reported_once_per_episode_and_junk_is_dropped_silently() {
+    let mut csms = rate_limited_csms(RateLimit::per_second(1).unwrap());
+    let mut recorder = Recorder::new();
+    heartbeat(&mut csms, NOW, "first", &mut recorder);
+
+    let mut reports = 0;
+    let mut answers = 0;
+    let mut violations = 0;
+    for n in 0..10_000 {
+        let frame = match n % 4 {
+            0 => format!(r#"[2,"c{n}","Heartbeat",{{}}]"#),
+            1 => "this is not json".to_owned(),
+            2 => format!(r#"[3,"nobody-asked-{n}",{{}}]"#),
+            _ => format!(
+                r#"[6,"s{n}","NotifyPeriodicEventStream",{{"id":1,"pending":0,"basetime":"2024-01-01T00:00:00Z","data":[]}}]"#
+            ),
+        };
+        csms.handle(NOW, Input::Received(&frame));
+        recorder.drain(&mut csms);
+        reports += rate_limited(recorder.outputs());
+        answers += recorder.frames().len();
+        violations += recorder.violations().len();
+        assert!(recorder.requests().is_empty());
+    }
+    assert_eq!(reports, 1, "one episode, one report");
+    assert_eq!(
+        answers, 2500,
+        "only the CALLs are answered, each with SecurityError"
+    );
+    assert_eq!(violations, 0, "junk over the rate is not even reported");
+
+    // After the flood stops, one interval admits the station again, and the next refusal
+    // starts a new episode.
+    let later = Instant::from_millis(1000);
+    heartbeat(&mut csms, later, "back", &mut recorder);
+    assert_eq!(recorder.requests().len(), 1);
+    csms.handle(later, Input::Received(r#"[2,"again","Heartbeat",{}]"#));
+    recorder.drain(&mut csms);
+    assert_eq!(rate_limited(recorder.outputs()), 1);
+}
+
+#[test]
+fn the_answer_to_our_own_call_is_never_counted_or_refused() {
+    let mut csms = rate_limited_csms(RateLimit::per_minute(1).unwrap());
+    let mut recorder = Recorder::new();
+    heartbeat(&mut csms, NOW, "spent", &mut recorder);
+
+    csms.call(
+        NOW,
+        "GetBaseReport",
+        raw(r#"{"requestId":1,"reportBase":"FullInventory"}"#),
+    )
+    .unwrap();
+    let id = recorder.drain(&mut csms).only_frame_id();
+    // The station is over its rate…
+    csms.handle(NOW, Input::Received(r#"[2,"x","Heartbeat",{}]"#));
+    recorder.drain(&mut csms);
+    assert_eq!(rate_limited(recorder.outputs()), 1);
+    // …and its answer to our call still lands.
+    csms.handle(
+        NOW,
+        Input::Received(&format!(r#"[3,"{id}",{{"status":"Accepted"}}]"#)),
+    );
+    recorder.drain(&mut csms);
+    assert_eq!(recorder.outcomes().len(), 1);
+    assert!(recorder.frames().is_empty(), "{:?}", recorder.frames());
+}
+
+#[test]
+fn an_over_rate_call_from_a_pending_station_is_answered_once() {
+    let mut csms = rate_limited_csms(RateLimit::per_minute(1).unwrap());
+    csms.handle(
+        NOW,
+        Input::Received(r#"[2,"b1","BootNotification",{"reason":"PowerUp"}]"#),
+    );
+    let _ = csms.drain();
+    csms.respond(
+        NOW,
+        &"b1".parse().unwrap(),
+        &raw(r#"{"currentTime":"2024-01-01T00:00:00Z","interval":0,"status":"Pending"}"#),
+    )
+    .unwrap();
+    let _ = csms.drain();
+
+    // Both the boot gate (B02.FR.09) and the rate would refuse this; the rate runs first.
+    let mut recorder = Recorder::new();
+    csms.handle(NOW, Input::Received(r#"[2,"h1","Heartbeat",{}]"#));
+    recorder.drain(&mut csms);
+    let only = recorder.only_frame();
+    assert!(only.contains("message rate exceeded"), "{only}");
+}
+
+#[test]
+fn without_a_rate_nothing_is_refused() {
+    let mut csms = Engine::new(EngineConfig::new(Role::Csms, Version::V2_1));
+    csms.handle(
+        NOW,
+        Input::Connected {
+            version: Version::V2_1,
+        },
+    );
+    let _ = csms.drain();
+    let mut recorder = Recorder::new();
+    for n in 0..1000 {
+        heartbeat(&mut csms, NOW, &format!("h{n}"), &mut recorder);
+        assert_eq!(recorder.requests().len(), 1);
+    }
 }

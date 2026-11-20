@@ -6,6 +6,40 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-11-20
+
+The CSMS edge, per-phase telemetry, and smart charging from plan to wire, including 2.1
+bidirectional charging.
+
+### Added
+
+- `ServerTls::with_optional_client_auth`: profiles 2 and 3 on one listener. A presented certificate
+  is still verified; the authenticator enforces A00.FR.002 against `Auth::profile`.
+- `CsmsBuilder::message_rate(RateLimit)` (`EngineConfig::with_inbound_rate`): over the rate a `CALL`
+  is answered `SecurityError` before the handler; `SessionEvent::RateLimited` once per episode.
+- `CsmsBuilder::idle_timeout`: closes a session without OCPP traffic (G02.FR.04).
+- `DisconnectReason` on `Event::Disconnected` and `SessionEvent::Closed`.
+- `csms::telemetry` and `DomainEvent::measurements()`: every sampled value, normalized, with
+  `per_phase(measurand)` → lines, neutral, `Total::Reported`/`Summed`, `phases_in_use`.
+- `smart_charging::ChargingPlan::to_profile`: per-slot ceilings into one `TxProfile` within
+  `StationLimits`, never above the plan.
+- `Profile::to_v1_6`/`to_v2_0_1`/`to_v2_1`, `set_request_*`, `from_v1_6`/`from_v2_0_1`/`from_v2_1`
+  with `ConversionError`.
+- `smart_charging::v2x` (2.1): `Operation` per V2X mode, `V2xPlan`, `DynamicSetpoint` (mandatory
+  fallback), `EvV2x` from `NotifyEVChargingNeeds`.
+
+### Changed
+
+- **Breaking:** `station::smart_charging` is now `smart_charging`, without the `station` feature.
+- **Breaking:** `DomainEvent::MeterValues::samples` is replaced by `measurements`
+  (`measurements.len()`); transaction events gain `measurements`.
+- **Breaking:** `SessionEvent::Closed::reason` and `Event::Disconnected::reason` are a
+  `DisconnectReason`; `Event::Disconnected::peer_close` is `DisconnectReason::PeerClosed(frame)`.
+- **Breaking:** `ServerTls::from_config(config)` takes no `mutual` flag; `is_mutual` is removed.
+- Unreadable values of every measurand raise warnings; a `Warning`'s `Display` escapes control
+  characters.
+- Crate `homepage` points at the documentation site.
+
 ## [0.5.0] — 2026-11-08
 
 Behaviour now follows OCPP 2.0.1 Edition 4, 2.1 Edition 2 (errata 2026-09 included) and the
@@ -410,7 +444,8 @@ property tests over the engine, the ledger and the composite-schedule calculatio
 interop against an independent implementation; end-to-end tests over real sockets; four
 `cargo fuzz` targets; and `thumbv7em-none-eabihf` (`no_std`) and `wasm32` builds in CI.
 
-[Unreleased]: https://github.com/hupe1980/ocpp-kit/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/hupe1980/ocpp-kit/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/hupe1980/ocpp-kit/releases/tag/v0.6.0
 [0.5.0]: https://github.com/hupe1980/ocpp-kit/releases/tag/v0.5.0
 [0.4.0]: https://github.com/hupe1980/ocpp-kit/releases/tag/v0.4.0
 [0.3.0]: https://github.com/hupe1980/ocpp-kit/releases/tag/v0.3.0

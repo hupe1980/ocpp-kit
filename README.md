@@ -23,8 +23,9 @@ $ cargo add ocpp-kit --features tokio,rustls
 | **L0** | `v1_6` · `v2_0_1` · `v2_1` | Typed, validated payloads for all **39 / 64 / 91** actions, generated from the official OCA JSON schemas | ✅ `alloc` |
 | **L1** | `rpc` | OCPP-J framing: `CALL`, `CALLRESULT`, `CALLERROR`, `CALLRESULTERROR`, `SEND`, with version-exact error codes, plus JWS signed messages | ✅ `alloc` |
 | **L2** | `engine` | A **sans-I/O** protocol engine: correlation, the one-outstanding-`CALL` rule, timeouts, transaction retries, the offline queue, the boot state machine | ✅ `alloc` |
-| **L3** | `transport` | Tokio + `rustls`, with its own RFC 6455 WebSocket and RFC 7692 compression: charging station, CSMS and local controller; security profiles 0 (1.6 only) to 3; network failover | – |
-| **L4** | `station` · `csms` | Opt-in blocks: device model, 1.6 configuration keys, transaction rules, local authorization, composite schedules, an idempotent CSMS ledger, version-agnostic events | partial |
+| **L3** | `transport` | Tokio + `rustls`, with its own RFC 6455 WebSocket and RFC 7692 compression: charging station, CSMS and local controller; security profiles 0 (1.6 only) to 3, profile 2 and 3 on one listener; per-station message rate and idle timeout; network failover | – |
+| **L4** | `station` · `csms` | Opt-in blocks: device model, 1.6 configuration keys, transaction rules, local authorization, an idempotent CSMS ledger, version-agnostic events with phase-aware telemetry | partial |
+| — | `smart_charging` | Block K for both sides: the composite schedule, a quarter-hour plan into a valid `TxProfile` within the station's limits, `ChargingProfile` across the wire for every version, and 2.1 bidirectional charging (V2X operation modes, dynamic setpoints, the EV's capabilities) | ✅ `alloc` |
 | — | `standard` | The catalogues that live outside the schemas: security events with their criticality, 74 standardized components, 458 variables, reason codes | ✅ `alloc` |
 | — | `metering` | Signed meter values: where each version hides the record a customer may be billed for, and how to read its public-key envelope | ✅ `alloc` |
 
@@ -121,6 +122,16 @@ a clock that has not moved since the last timer fired expires the moment it is a
 Controller are built from the same engine. The local controller opens one upstream connection
 per attached station under the station's own identity, propagates closes in both directions,
 and relays the OCPP-J text unchanged so signed messages survive.
+
+**The edge a CSMS shows the internet.** Authentication is `async` and answers 401 or 404; the
+Basic user must *be* the URL identity (A00.FR.204/207). `message_rate` refuses a flooding station
+before your handler, `idle_timeout` frees a peer that answers pings but never speaks OCPP, and one
+listener can serve profiles 2 and 3. Every session ends with a `DisconnectReason` you can match on.
+
+**Controlling a wallbox, not just talking to it.** `per_phase(CURRENT_IMPORT)` reads a 1.6 and a
+2.1 station the same way. `ChargingPlan::to_profile` turns quarter-hour ceilings into one
+`TxProfile` within the station's limits that never exceeds the plan, and `smart_charging::v2x` does
+the same for 2.1 setpoints — discharge is a magnitude, so there is no sign to get wrong.
 
 **The value that pays for the electricity.** Under German calibration law a customer may only
 be billed for a value they can check, which is the record the *meter* signed — not the

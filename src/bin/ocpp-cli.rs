@@ -411,6 +411,9 @@ fn run_csms(args: &mut Args) -> Result<(), String> {
                     SessionEvent::Closed { identity, reason } => {
                         eprintln!("- {identity}: {reason}");
                     }
+                    SessionEvent::RateLimited { identity } => {
+                        eprintln!("! {identity} is over its message rate");
+                    }
                     other => eprintln!("  {other:?}"),
                 }
             }

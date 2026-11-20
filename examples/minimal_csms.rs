@@ -11,7 +11,7 @@ use std::sync::Mutex;
 use ocpp_kit::RawValue;
 use ocpp_kit::csms::events::{Observed, observe_v16, observe_v21, observe_v201};
 use ocpp_kit::csms::ledger::{Ingested, Ledger};
-use ocpp_kit::engine::IncomingRequest;
+use ocpp_kit::engine::{IncomingRequest, RateLimit};
 use ocpp_kit::rpc::CallError;
 use ocpp_kit::transport::{Auth, AuthOutcome, BoxFuture, Csms, Ctx, Handler, SessionEvent};
 use ocpp_kit::types::DateTime;
@@ -178,6 +178,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AuthOutcome::accept()
         })
         .handler(SharedHandler(handler.clone()))
+        // 120 messages a minute per station, 30 back to back for the boot burst. Over it, a
+        // call is answered SecurityError before the handler runs.
+        .message_rate(RateLimit::per_minute(120)?.with_burst(30)?)
+        // Three of the 300 s heartbeat intervals handed out below: a station that has said
+        // nothing in OCPP for that long is gone, whether or not it still answers pings.
+        .idle_timeout(std::time::Duration::from_secs(900))
         .build()?;
 
     let mut events = csms.handle().events();
@@ -190,6 +196,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("+ {identity} speaks OCPP {version}");
                 }
                 SessionEvent::Closed { identity, reason } => println!("- {identity}: {reason}"),
+                SessionEvent::RateLimited { identity } => println!("! {identity} is over its rate"),
                 other => println!("  {other:?}"),
             }
         }

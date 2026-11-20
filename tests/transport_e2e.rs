@@ -594,7 +594,14 @@ async fn a_connection_that_stops_answering_pings_is_closed() {
     .await
     .expect("the session must be closed, not left hanging");
     assert_eq!(closed.0.as_str(), "CS-MUTE");
-    assert!(closed.1.contains("pong"), "{}", closed.1);
+    assert!(
+        matches!(
+            closed.1,
+            ocpp_kit::transport::DisconnectReason::PongTimeout(_)
+        ),
+        "{}",
+        closed.1
+    );
     drop(socket);
 }
 
@@ -1070,8 +1077,9 @@ async fn sessions_report_compression_and_the_peers_close_frame() {
 
     let peer_close = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if let Ok(ocpp_kit::transport::Event::Disconnected { peer_close, .. }) =
-                events.recv().await
+            if let Ok(ocpp_kit::transport::Event::Disconnected {
+                reason: ocpp_kit::transport::DisconnectReason::PeerClosed(peer_close),
+            }) = events.recv().await
             {
                 return peer_close;
             }
@@ -1245,4 +1253,417 @@ async fn a_station_with_store_poll_sends_what_another_process_queued() {
     assert_eq!(csms_handler.transaction_events.load(Ordering::SeqCst), 1);
 
     station.shutdown(Duration::from_secs(2)).await;
+}
+
+// ---------------------------------------------------------------------------
+// Station edge: idle timeout and message rate, driven by an outside WebSocket client
+// ---------------------------------------------------------------------------
+
+type ReferenceSocket = tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>;
+
+/// A tokio-tungstenite client speaking `ocpp2.1`. It answers pings by itself whenever the
+/// test reads from it, which is exactly what a peer that is alive but silent looks like.
+async fn reference_client(port: u16, identity: &str) -> ReferenceSocket {
+    let request = tokio_tungstenite::tungstenite::http::Request::builder()
+        .uri(format!("ws://127.0.0.1:{port}/ocpp/{identity}"))
+        .header("Host", format!("127.0.0.1:{port}"))
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Version", "13")
+        .header(
+            "Sec-WebSocket-Key",
+            tokio_tungstenite::tungstenite::handshake::client::generate_key(),
+        )
+        .header("Sec-WebSocket-Protocol", "ocpp2.1")
+        .body(())
+        .unwrap();
+    let stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    let (socket, _) = tokio_tungstenite::client_async(request, stream)
+        .await
+        .unwrap();
+    socket
+}
+
+async fn start_csms_with(
+    configure: impl FnOnce(ocpp_kit::transport::CsmsBuilder) -> ocpp_kit::transport::CsmsBuilder,
+) -> (u16, CsmsHandle) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let builder = Csms::builder()
+        .bind(listener.local_addr().unwrap())
+        .versions([Version::V2_1])
+        .authenticate(accept_all)
+        .handler(ArcHandler(Arc::new(CsmsSide::new(
+            v2_1::RegistrationStatus::Accepted,
+        ))));
+    let csms = configure(builder).build().unwrap();
+    let handle = csms.handle();
+    tokio::spawn(async move {
+        let _ = csms.serve_on(listener).await;
+    });
+    (port, handle)
+}
+
+async fn closed_reason(
+    events: &mut tokio::sync::broadcast::Receiver<SessionEvent>,
+    within: Duration,
+) -> Option<ocpp_kit::transport::DisconnectReason> {
+    tokio::time::timeout(within, async {
+        loop {
+            if let Ok(SessionEvent::Closed { reason, .. }) = events.recv().await {
+                return reason;
+            }
+        }
+    })
+    .await
+    .ok()
+}
+
+/// A peer that answers every ping but never speaks OCPP is closed after the idle timeout —
+/// keepalive alone would keep it for ever.
+#[tokio::test]
+async fn a_station_that_only_answers_pings_is_closed_as_idle() {
+    use futures_util::StreamExt as _;
+    use ocpp_kit::transport::{DisconnectReason, Keepalive};
+
+    let idle = Duration::from_millis(400);
+    let (port, csms) = start_csms_with(|builder| {
+        builder
+            .keepalive(
+                Keepalive::every(Duration::from_millis(50))
+                    .with_timeout(Duration::from_millis(200)),
+            )
+            .idle_timeout(idle)
+    })
+    .await;
+    let mut events = csms.events();
+
+    let mut socket = reference_client(port, "CS-SILENT").await;
+    let pongs = tokio::spawn(async move {
+        // Reading is what makes tungstenite answer the pings; the peer says nothing else.
+        while let Some(Ok(_)) = socket.next().await {}
+    });
+
+    let started = std::time::Instant::now();
+    let reason = closed_reason(&mut events, Duration::from_secs(5))
+        .await
+        .expect("the silent session is closed");
+    assert_eq!(reason, DisconnectReason::Idle(idle));
+    assert!(started.elapsed() >= idle, "not before the timeout");
+    assert!(started.elapsed() < idle + Duration::from_secs(1), "SC-003");
+    pongs.abort();
+}
+
+/// Off unless named: without `idle_timeout`, a silent peer that answers pings is left alone,
+/// exactly as before the setting existed.
+#[tokio::test]
+async fn without_an_idle_timeout_a_silent_station_stays() {
+    use futures_util::StreamExt as _;
+    use ocpp_kit::transport::Keepalive;
+
+    let (port, csms) = start_csms_with(|builder| {
+        builder.keepalive(
+            Keepalive::every(Duration::from_millis(50)).with_timeout(Duration::from_millis(200)),
+        )
+    })
+    .await;
+    let mut events = csms.events();
+    let mut socket = reference_client(port, "CS-QUIET").await;
+    let pongs = tokio::spawn(async move { while let Some(Ok(_)) = socket.next().await {} });
+
+    assert!(
+        closed_reason(&mut events, Duration::from_millis(800))
+            .await
+            .is_none(),
+        "no idle close when none was configured"
+    );
+    assert!(
+        csms.session(&Identity::new("CS-QUIET").unwrap())
+            .await
+            .is_some()
+    );
+    pongs.abort();
+}
+
+/// G02.FR.04: any message is activity, so a station that speaks more often than the idle
+/// timeout stays connected however long it lives.
+#[tokio::test]
+async fn a_station_that_talks_is_never_idle() {
+    use futures_util::{SinkExt as _, StreamExt as _};
+    use tokio_tungstenite::tungstenite::Message as RefMessage;
+
+    let idle = Duration::from_millis(300);
+    let (port, csms) = start_csms_with(|builder| builder.idle_timeout(idle)).await;
+    let mut events = csms.events();
+
+    let mut socket = reference_client(port, "CS-CHATTY").await;
+    for n in 0..8 {
+        socket
+            .send(RefMessage::text(format!(r#"[2,"h{n}","Heartbeat",{{}}]"#)))
+            .await
+            .unwrap();
+        let _ = socket.next().await;
+        tokio::time::sleep(idle / 2).await;
+    }
+    assert!(
+        closed_reason(&mut events, Duration::from_millis(10))
+            .await
+            .is_none(),
+        "a station sending every T/2 stays connected"
+    );
+    assert!(
+        csms.session(&Identity::new("CS-CHATTY").unwrap())
+            .await
+            .is_some()
+    );
+}
+
+/// The rate over a real socket: the burst reaches the handler, the rest is answered
+/// `SecurityError`, and the fleet hears about it once.
+#[tokio::test]
+async fn a_flooding_station_is_answered_security_error_and_reported_once() {
+    use futures_util::{SinkExt as _, StreamExt as _};
+    use ocpp_kit::engine::RateLimit;
+    use tokio_tungstenite::tungstenite::Message as RefMessage;
+
+    let (port, csms) = start_csms_with(|builder| {
+        builder.message_rate(RateLimit::per_minute(60).unwrap().with_burst(3).unwrap())
+    })
+    .await;
+    let mut events = csms.events();
+
+    let mut socket = reference_client(port, "CS-FLOOD").await;
+    let mut served = 0;
+    let mut refused = 0;
+    for n in 0..20 {
+        socket
+            .send(RefMessage::text(format!(r#"[2,"h{n}","Heartbeat",{{}}]"#)))
+            .await
+            .unwrap();
+        // Skip the keepalive's pings; tungstenite answers them on its own.
+        let answer = loop {
+            match socket.next().await {
+                Some(Ok(RefMessage::Text(answer))) => break answer,
+                Some(Ok(_)) => {}
+                other => panic!("an answer, not {other:?}"),
+            }
+        };
+        if answer.starts_with("[3,") {
+            served += 1;
+        } else {
+            assert!(answer.contains("SecurityError"), "{answer}");
+            refused += 1;
+        }
+    }
+    assert_eq!((served, refused), (3, 17));
+
+    let mut reports = 0;
+    while let Ok(Ok(event)) = tokio::time::timeout(Duration::from_millis(200), events.recv()).await
+    {
+        if let SessionEvent::RateLimited { identity } = event {
+            assert_eq!(identity.as_str(), "CS-FLOOD");
+            reports += 1;
+        }
+    }
+    assert_eq!(reports, 1);
+}
+
+// ---------------------------------------------------------------------------
+// Mixed profiles on one listener: ServerTls::with_optional_client_auth
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "rustls")]
+mod mixed_profiles {
+    use super::*;
+    use ocpp_kit::transport::{ClientTls, Credentials, ServerTls};
+    use tokio::sync::mpsc;
+
+    const TLS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/tls");
+
+    fn fixture(name: &str) -> String {
+        format!("{TLS}/{name}")
+    }
+
+    /// What the authenticator was told, per connection.
+    type Seen = (SecurityProfile, &'static str);
+
+    /// A CSMS on one optional-client-auth listener. `CS-CERT` is provisioned for profile 3,
+    /// `CS-BASIC` for profile 2; the authenticator enforces A00.FR.002 and reports what it saw.
+    async fn start() -> (u16, CsmsHandle, mpsc::UnboundedReceiver<Seen>) {
+        let (seen_tx, seen) = mpsc::unbounded_channel();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let tls = ServerTls::with_optional_client_auth(
+            fixture("csms.pem"),
+            fixture("csms.key"),
+            fixture("ca.pem"),
+        )
+        .unwrap();
+        let csms = Csms::builder()
+            .bind(listener.local_addr().unwrap())
+            .versions([Version::V2_1])
+            .tls(tls)
+            .authenticate(move |auth: Auth| {
+                let seen_tx = seen_tx.clone();
+                async move {
+                    let presented = match auth.credentials {
+                        Credentials::ClientCertificate { .. } => "certificate",
+                        Credentials::Basic { .. } => "basic",
+                        _ => "nothing",
+                    };
+                    let _ = seen_tx.send((auth.profile, presented));
+                    let provisioned = match auth.identity.as_str() {
+                        "CS-CERT" => SecurityProfile::TlsClientCertificate,
+                        "CS-BASIC" => SecurityProfile::TlsBasicAuth,
+                        _ => return AuthOutcome::Unknown,
+                    };
+                    // A00.FR.002 — the line the documentation asks every mixed listener for.
+                    if auth.profile != provisioned {
+                        return AuthOutcome::Reject;
+                    }
+                    AuthOutcome::accept()
+                }
+            })
+            .handler(ArcHandler(Arc::new(CsmsSide::new(
+                v2_1::RegistrationStatus::Accepted,
+            ))))
+            .ping_interval(None)
+            .build()
+            .unwrap();
+        let handle = csms.handle();
+        tokio::spawn(async move {
+            let _ = csms.serve_on(listener).await;
+        });
+        (port, handle, seen)
+    }
+
+    fn station(port: u16, identity: &str, profile: SecurityProfile, tls: ClientTls) -> Handle {
+        let mut builder = Station::builder()
+            .identity(identity)
+            .unwrap()
+            .url(format!("wss://127.0.0.1:{port}/ocpp"))
+            .versions([Version::V2_1])
+            .security_profile(profile)
+            .tls(tls)
+            .ping_interval(None)
+            .reconnect(false)
+            .handler(StationSide);
+        if profile == SecurityProfile::TlsBasicAuth {
+            builder = builder.password(
+                ocpp_kit::transport::BasicAuthPassword::utf8("0123456789abcdef").unwrap(),
+            );
+        }
+        builder.build().unwrap().spawn().unwrap()
+    }
+
+    fn trusting_client(certificate: Option<(&str, &str)>) -> ClientTls {
+        let mut builder = ClientTls::builder().root_file(fixture("ca.pem")).unwrap();
+        if let Some((chain, key)) = certificate {
+            builder = builder
+                .client_certificate(fixture(chain), fixture(key))
+                .unwrap();
+        }
+        builder.build().unwrap()
+    }
+
+    async fn opened_within(
+        events: &mut tokio::sync::broadcast::Receiver<SessionEvent>,
+        within: Duration,
+    ) -> Option<String> {
+        tokio::time::timeout(within, async {
+            loop {
+                match events.recv().await {
+                    Ok(SessionEvent::Opened { identity, .. }) => return Some(identity.to_string()),
+                    Ok(SessionEvent::Refused { status, .. }) => {
+                        return Some(format!("refused {status}"));
+                    }
+                    Ok(_) => {}
+                    Err(_) => return None,
+                }
+            }
+        })
+        .await
+        .ok()
+        .flatten()
+    }
+
+    async fn opened(events: &mut tokio::sync::broadcast::Receiver<SessionEvent>) -> Option<String> {
+        opened_within(events, Duration::from_secs(5)).await
+    }
+
+    /// the profile is what the connection presented, not what the listener allows.
+    #[tokio::test]
+    async fn one_listener_serves_profile_3_and_profile_2() {
+        let (port, csms, mut seen) = start().await;
+        let mut events = csms.events();
+
+        let _cert = station(
+            port,
+            "CS-CERT",
+            SecurityProfile::TlsClientCertificate,
+            trusting_client(Some(("station.pem", "station.key"))),
+        );
+        assert_eq!(opened(&mut events).await.as_deref(), Some("CS-CERT"));
+        assert_eq!(
+            seen.recv().await,
+            Some((SecurityProfile::TlsClientCertificate, "certificate"))
+        );
+
+        let _basic = station(
+            port,
+            "CS-BASIC",
+            SecurityProfile::TlsBasicAuth,
+            trusting_client(None),
+        );
+        assert_eq!(opened(&mut events).await.as_deref(), Some("CS-BASIC"));
+        assert_eq!(
+            seen.recv().await,
+            Some((SecurityProfile::TlsBasicAuth, "basic"))
+        );
+    }
+
+    /// A00.FR.407: optional means "may be absent", never "need not verify".
+    #[tokio::test]
+    async fn a_certificate_from_an_untrusted_issuer_fails_the_handshake() {
+        let (port, csms, mut seen) = start().await;
+        let mut events = csms.events();
+
+        let _rogue = station(
+            port,
+            "CS-CERT",
+            SecurityProfile::TlsClientCertificate,
+            trusting_client(Some(("rogue-station.pem", "rogue-station.key"))),
+        );
+        assert_eq!(
+            opened_within(&mut events, Duration::from_secs(1)).await,
+            None,
+            "no session, no refusal: TLS ended it"
+        );
+        assert!(
+            seen.try_recv().is_err(),
+            "the authenticator was never asked"
+        );
+    }
+
+    /// A00.FR.002: a profile-3 station connecting without its certificate is a
+    /// downgrade, and the authenticator refuses it.
+    #[tokio::test]
+    async fn a_profile_3_station_without_its_certificate_is_refused() {
+        let (port, csms, mut seen) = start().await;
+        let mut events = csms.events();
+
+        let _downgrade = station(
+            port,
+            "CS-CERT",
+            SecurityProfile::TlsBasicAuth,
+            trusting_client(None),
+        );
+        assert_eq!(opened(&mut events).await.as_deref(), Some("refused 401"));
+        assert_eq!(
+            seen.recv().await,
+            Some((SecurityProfile::TlsBasicAuth, "basic"))
+        );
+    }
 }

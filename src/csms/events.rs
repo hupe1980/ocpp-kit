@@ -12,6 +12,9 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+#[cfg(any(feature = "v1_6", feature = "v2_0_1", feature = "v2_1"))]
+use super::telemetry::Measurement;
+use super::telemetry::Measurements;
 use crate::metering::SignedMeterValue;
 use crate::types::{DateTime, Decimal};
 use crate::version::Version;
@@ -73,6 +76,9 @@ pub enum DomainEvent {
         meter_start: Option<EnergyReading>,
         /// Every signed meter value the event carried, in the order they arrived.
         signed: Vec<SignedReading>,
+        /// Every sampled value the event carried — current, power, voltage per phase — with
+        /// the specification's defaults applied. See [`telemetry`](super::telemetry).
+        measurements: Measurements,
         /// When it started.
         timestamp: DateTime,
     },
@@ -104,6 +110,8 @@ pub enum DomainEvent {
         meter: Option<EnergyReading>,
         /// Every signed meter value the event carried, in the order they arrived.
         signed: Vec<SignedReading>,
+        /// Every sampled value the event carried. See [`telemetry`](super::telemetry).
+        measurements: Measurements,
         /// Whether the station was offline when it happened.
         offline: bool,
         /// When it happened.
@@ -134,6 +142,8 @@ pub enum DomainEvent {
         /// begin record has no message of its own, so both travel in
         /// `StopTransaction.transactionData`.
         signed: Vec<SignedReading>,
+        /// Every sampled value the event carried. See [`telemetry`](super::telemetry).
+        measurements: Measurements,
         /// When it ended.
         timestamp: DateTime,
     },
@@ -147,8 +157,10 @@ pub enum DomainEvent {
         connector_id: Option<i32>,
         /// The transaction, when the samples belong to one.
         transaction_id: Option<String>,
-        /// How many samples arrived.
-        samples: usize,
+        /// Every sampled value, with the specification's defaults applied — the telemetry
+        /// half beside [`energy`](Self::MeterValues::energy). See
+        /// [`telemetry`](super::telemetry).
+        measurements: Measurements,
         /// The energy register, when one of the samples carried it.
         energy: Option<EnergyReading>,
         /// Every signed meter value the message carried, in the order they arrived.
@@ -179,6 +191,21 @@ pub enum DomainEvent {
         /// The action name.
         action: String,
     },
+}
+
+impl DomainEvent {
+    /// The sampled values this event carried; empty for an event that carries none.
+    #[must_use]
+    pub fn measurements(&self) -> &Measurements {
+        static NONE: Measurements = Measurements(Vec::new());
+        match self {
+            Self::TransactionStarted { measurements, .. }
+            | Self::TransactionUpdated { measurements, .. }
+            | Self::TransactionEnded { measurements, .. }
+            | Self::MeterValues { measurements, .. } => measurements,
+            _ => &NONE,
+        }
+    }
 }
 
 /// A domain event together with the version it came from and anything that could not be
@@ -237,8 +264,18 @@ impl Warning {
 }
 
 impl core::fmt::Display for Warning {
+    /// One line: the detail is whatever the station sent, so its control characters are
+    /// escaped rather than allowed to start a forged log line.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}: {}", self.kind.as_str(), self.detail)
+        write!(f, "{}: ", self.kind.as_str())?;
+        for c in self.detail.chars() {
+            if c.is_control() {
+                write!(f, "{}", c.escape_debug())?;
+            } else {
+                core::fmt::Write::write_char(f, c)?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -250,10 +287,8 @@ pub enum WarningKind {
     /// customer may be billed for — and the document in it does not parse. 1.6 only; 2.x has
     /// a typed field that cannot be malformed this way.
     UnreadableSignedData,
-    /// A sampled value carrying an energy register is not a number. 1.6 spells a reading as
-    /// a string, so this is what a station sending anything else looks like. Samples of other
-    /// measurands are not reported: this model does not carry them, so there is nothing lost
-    /// to report.
+    /// A sampled value is not a number. 1.6 spells a reading as a string, so this is what a
+    /// station sending anything else looks like.
     UnreadableReading,
     /// An energy register arrived in a unit that is not an energy unit, so it could not be
     /// converted to Wh. Assuming Wh would be a factor-1000 error in someone's invoice.
@@ -261,6 +296,9 @@ pub enum WarningKind {
     /// An energy register, or its `multiplier`, puts the value outside what a
     /// [`Decimal`] can hold. A meter reading needs 19 digits only if something is wrong.
     UnrepresentableReading,
+    /// A sampled value that is not an energy register arrived in a unit the kit does not know.
+    /// It is still carried, in that unit and unconverted — never assumed to be W or A.
+    UnknownUnit,
 }
 
 impl WarningKind {
@@ -272,6 +310,7 @@ impl WarningKind {
             WarningKind::UnreadableReading => "unreadable reading",
             WarningKind::UnknownEnergyUnit => "unknown energy unit",
             WarningKind::UnrepresentableReading => "unrepresentable reading",
+            WarningKind::UnknownUnit => "unknown unit",
         }
     }
 }
@@ -341,6 +380,10 @@ struct Sample<'a> {
     /// dropping, which is why it is kept apart from `value: None` ("no measurement here").
     unreadable_value: Option<&'a str>,
     signed: Option<Result<SignedMeterValue, crate::metering::SignedDataError>>,
+    phase: Option<&'a str>,
+    location: Option<&'a str>,
+    /// The timestamp of the group of samples this one came with.
+    timestamp: DateTime,
 }
 
 /// Which of several matching samples to take.
@@ -396,6 +439,63 @@ fn signed_from_samples<'a>(
         }
     }
     out
+}
+
+/// Every sampled value as a [`Measurement`], with the specification's defaults applied.
+///
+/// The energy register's own problems are reported by [`energy_from_samples`], so a sample of
+/// that measurand raises nothing here; every other measurand raises its unreadable,
+/// unrepresentable and unknown-unit warnings here, because this is where it is carried.
+#[cfg(any(feature = "v1_6", feature = "v2_0_1", feature = "v2_1"))]
+fn measurements_from_samples<'a>(
+    samples: impl Iterator<Item = Sample<'a>>,
+    warnings: &mut Vec<Warning>,
+) -> Measurements {
+    use super::telemetry::{Location, NormalizeProblem, Phase, normalize};
+    use alloc::string::ToString as _;
+
+    let mut out = Vec::new();
+    for sample in samples {
+        let measurand = sample.measurand.unwrap_or(ENERGY_REGISTER);
+        let report = measurand != ENERGY_REGISTER;
+        let Some(value) = sample.value else {
+            if let (Some(text), true) = (sample.unreadable_value, report) {
+                warnings.push(Warning::new(WarningKind::UnreadableReading, text));
+            }
+            continue;
+        };
+        let Ok((normalized, unit, problem)) =
+            normalize(value, sample.unit, sample.multiplier, measurand)
+        else {
+            if report {
+                warnings.push(Warning::new(
+                    WarningKind::UnrepresentableReading,
+                    alloc::format!(
+                        "{measurand} {value} with multiplier {}",
+                        sample.multiplier.unwrap_or(0)
+                    ),
+                ));
+            }
+            continue;
+        };
+        if let (Some(NormalizeProblem::UnknownUnit), true) = (problem, report) {
+            warnings.push(Warning::new(
+                WarningKind::UnknownUnit,
+                alloc::format!("{measurand} in {}", sample.unit.unwrap_or_default()),
+            ));
+        }
+        let value = normalized;
+        out.push(Measurement {
+            measurand: measurand.to_string(),
+            phase: sample.phase.map(Phase::parse),
+            location: Location::parse(sample.location),
+            context: sample.context.unwrap_or("Sample.Periodic").to_string(),
+            value,
+            unit,
+            timestamp: Some(sample.timestamp),
+        });
+    }
+    Measurements(out)
 }
 
 /// Extracts the energy register, in Wh, from a set of sampled values.
@@ -492,8 +592,8 @@ fn unit_exponent(unit: Option<&str>) -> Option<i32> {
 #[cfg(feature = "v1_6")]
 mod v16_conversion {
     use super::{
-        DomainEvent, EnergyReading, Observed, Prefer, Sample, energy_from_samples,
-        signed_from_samples,
+        DomainEvent, EnergyReading, Measurements, Observed, Prefer, Sample, energy_from_samples,
+        measurements_from_samples, signed_from_samples,
     };
     use crate::types::Decimal;
     use crate::v1_6;
@@ -530,6 +630,9 @@ mod v16_conversion {
                     unreadable_value: matches!(measurement, Some(Err(_)))
                         .then_some(sample.value.as_str()),
                     signed,
+                    phase: sample.phase.as_ref().map(v1_6::Phase::as_str),
+                    location: sample.location.as_ref().map(v1_6::Location::as_str),
+                    timestamp: entry.timestamp,
                 }
             })
         })
@@ -582,6 +685,7 @@ mod v16_conversion {
                 // 1.6 gives StartTransaction nowhere to put a signed record; the begin one
                 // travels with the stop message instead.
                 signed: Vec::new(),
+                measurements: Measurements::default(),
                 timestamp: start.timestamp,
             },
             v1_6::CsRequest::StopTransaction(stop) => DomainEvent::TransactionEnded {
@@ -606,29 +710,29 @@ mod v16_conversion {
                     signed: None,
                 }),
                 signed: signed_from_samples(samples(transaction_data(stop)), &mut warnings),
+                measurements: measurements_from_samples(
+                    samples(transaction_data(stop)),
+                    &mut warnings,
+                ),
                 timestamp: stop.timestamp,
             },
-            v1_6::CsRequest::MeterValues(values) => {
-                let count: usize = values
-                    .meter_value
-                    .iter()
-                    .map(|entry| entry.sampled_value.len())
-                    .sum();
-                DomainEvent::MeterValues {
-                    evse_id: None,
-                    connector_id: Some(values.connector_id),
-                    transaction_id: values.transaction_id.map(|id| id.to_string()),
-                    samples: count,
-                    energy: energy_from_samples(
-                        samples(&values.meter_value),
-                        Prefer::Last,
-                        None,
-                        &mut warnings,
-                    ),
-                    signed: signed_from_samples(samples(&values.meter_value), &mut warnings),
-                    timestamp: values.meter_value.iter().map(|entry| entry.timestamp).max(),
-                }
-            }
+            v1_6::CsRequest::MeterValues(values) => DomainEvent::MeterValues {
+                evse_id: None,
+                connector_id: Some(values.connector_id),
+                transaction_id: values.transaction_id.map(|id| id.to_string()),
+                measurements: measurements_from_samples(
+                    samples(&values.meter_value),
+                    &mut warnings,
+                ),
+                energy: energy_from_samples(
+                    samples(&values.meter_value),
+                    Prefer::Last,
+                    None,
+                    &mut warnings,
+                ),
+                signed: signed_from_samples(samples(&values.meter_value), &mut warnings),
+                timestamp: values.meter_value.iter().map(|entry| entry.timestamp).max(),
+            },
             v1_6::CsRequest::SecurityEventNotification(security) => DomainEvent::SecurityEvent {
                 event_type: security.r#type.clone(),
                 timestamp: security.timestamp,
@@ -657,7 +761,7 @@ macro_rules! observe_2x {
         mod $wrapper {
             use super::{
                 DomainEvent, Observed, Prefer, Sample, Warning, energy_from_samples,
-                signed_from_samples,
+                measurements_from_samples, signed_from_samples,
             };
             use crate::version::Version;
             use alloc::vec::Vec;
@@ -685,6 +789,9 @@ macro_rules! observe_2x {
                             .signed_meter_value
                             .as_ref()
                             .map(|value| Ok(value.into())),
+                        phase: sample.phase.as_ref().map(v::Phase::as_str),
+                        location: sample.location.as_ref().map(v::Location::as_str),
+                        timestamp: entry.timestamp,
                     })
                 })
             }
@@ -748,6 +855,10 @@ macro_rules! observe_2x {
                                     &mut warnings,
                                 ),
                                 signed: signed_from_samples(samples(entries), &mut warnings),
+                                measurements: measurements_from_samples(
+                                    samples(entries),
+                                    &mut warnings,
+                                ),
                                 timestamp: event.timestamp,
                             },
                             v::TransactionEventEnum::Ended => DomainEvent::TransactionEnded {
@@ -767,6 +878,10 @@ macro_rules! observe_2x {
                                     &mut warnings,
                                 ),
                                 signed: signed_from_samples(samples(entries), &mut warnings),
+                                measurements: measurements_from_samples(
+                                    samples(entries),
+                                    &mut warnings,
+                                ),
                                 timestamp: event.timestamp,
                             },
                             _ => DomainEvent::TransactionUpdated {
@@ -782,23 +897,25 @@ macro_rules! observe_2x {
                                     &mut warnings,
                                 ),
                                 signed: signed_from_samples(samples(entries), &mut warnings),
+                                measurements: measurements_from_samples(
+                                    samples(entries),
+                                    &mut warnings,
+                                ),
                                 offline: event.offline.unwrap_or(false),
                                 timestamp: event.timestamp,
                             },
                         }
                     }
                     v::CsRequest::MeterValues(values) => {
-                        let count: usize = values
-                            .meter_value
-                            .iter()
-                            .map(|entry| entry.sampled_value.len())
-                            .sum();
                         DomainEvent::MeterValues {
                             evse_id: Some(values.evse_id),
                             // 2.x's `MeterValuesRequest` names an EVSE and no connector.
                             connector_id: None,
                             transaction_id: None,
-                            samples: count,
+                            measurements: measurements_from_samples(
+                                samples(&values.meter_value),
+                                &mut warnings,
+                            ),
                             energy: energy_from_samples(
                                 samples(&values.meter_value),
                                 Prefer::Last,
@@ -1206,12 +1323,15 @@ mod tests {
             v1_6::MeterValuesRequest::new(1, values),
         ));
         let DomainEvent::MeterValues {
-            energy, samples, ..
+            energy,
+            measurements,
+            ..
         } = &observed.event
         else {
             panic!("{:?}", observed.event)
         };
-        assert_eq!(*samples, 2);
+        // The unparseable one is not a measurement; it is a warning.
+        assert_eq!(measurements.len(), 1);
         assert_eq!(energy.as_ref().unwrap().wh.to_string(), "4500.5");
     }
 
@@ -1364,7 +1484,7 @@ mod tests {
                 v1_6::SampledValue::new("7")
                     .with_measurand(v1_6::Measurand::EnergyActiveImportRegister)
                     .with_unit(v1_6::UnitOfMeasure::A),
-                // Not an energy register, so not this model's business either way.
+                // Not an energy register, but carried as a measurement — so reported too.
                 v1_6::SampledValue::new("nonsense").with_measurand(v1_6::Measurand::Voltage),
             ],
         )];
@@ -1380,12 +1500,16 @@ mod tests {
         assert_eq!(
             kinds,
             alloc::vec![
+                // The voltage, from the measurements…
                 WarningKind::UnreadableReading,
-                WarningKind::UnknownEnergyUnit
+                // …then the two energy registers.
+                WarningKind::UnreadableReading,
+                WarningKind::UnknownEnergyUnit,
             ]
         );
-        assert_eq!(observed.warnings[0].detail, "twelve");
-        assert_eq!(observed.warnings[1].detail, "A");
+        assert_eq!(observed.warnings[0].detail, "nonsense");
+        assert_eq!(observed.warnings[1].detail, "twelve");
+        assert_eq!(observed.warnings[2].detail, "A");
     }
 
     /// A conforming message raises nothing. The warnings are worth logging precisely because

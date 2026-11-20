@@ -183,10 +183,54 @@ in-flight answer before it is cut, and it can only ever remove *its own* entry f
 never the successor that replaced it. `CsmsHandle::call(&identity, request)` reaches any
 connected station from anywhere in your application.
 
+### Bounding the station edge
+
 `max_connections` bounds established sessions, which is no help against a peer that opens
 sockets and then says nothing — so `max_pending_handshakes` bounds the other half and
 `handshake_timeout` makes each of those slots turn over. Per session, handler tasks are bounded
 too: a peer that ignores the one-outstanding-`CALL` rule is served, but not at unlimited cost.
+
+Those bound what is *in flight*. Two settings bound what an authenticated station does with its
+session; both are off by default, because the right values depend on the fleet:
+
+```rust,no_run
+use std::time::Duration;
+use ocpp_kit::engine::RateLimit;
+use ocpp_kit::transport::{AcceptEveryStation, Csms};
+
+# fn build() -> Result<(), Box<dyn std::error::Error>> {
+let csms = Csms::builder()
+    .bind("0.0.0.0:9000".parse()?)
+    .authenticate(AcceptEveryStation)
+    .message_rate(RateLimit::per_minute(120)?.with_burst(30)?)
+    .idle_timeout(Duration::from_secs(900)) // 3 × a 300 s HeartbeatInterval
+    .build()?;
+# Ok(()) }
+```
+
+**`message_rate`** counts every `CALL`, `SEND`, malformed frame and answer to nothing — never the
+answer to your own call. Over the rate, a `CALL` gets `CALLERROR` `SecurityError` before your handler
+runs and everything else is dropped silently. `SessionEvent::RateLimited` fires once per episode.
+Size the burst for a station's boot (a `StatusNotification` per connector at least).
+
+**`idle_timeout`** closes a session that has received no OCPP message for that long. Any message
+counts (G02.FR.04); pings do not (Part 4 §5.3). A conforming station sends a `Heartbeat` after
+`HeartbeatInterval` of silence (G02.FR.02), so set it to a few of the intervals you hand out.
+
+### Why a session ended
+
+`SessionEvent::Closed` and `Event::Disconnected` carry a `DisconnectReason`:
+
+| `DisconnectReason` | Cause |
+|---|---|
+| `Idle(timeout)` | no OCPP message within `idle_timeout` |
+| `PongTimeout(timeout)` | a WebSocket ping went unanswered |
+| `PeerClosed(frame)` | the peer sent a close frame |
+| `Closed(reason)` | the engine closed it: drained, drain timed out, or requested |
+| `Transport(error)` | the socket failed or ended without a close frame |
+
+`Display` is one log line with the peer's text escaped. A station reconnects after every reason
+except `Closed`.
 
 ## Local Controller
 
@@ -273,8 +317,8 @@ and `RepairKind`. Responses that `Handle::call` decodes report the same way.
 ### Watching a fleet
 
 `CsmsHandle::events()` is one stream for every station. Besides `Opened`, `Closed`,
-`Superseded` and `Refused`, it carries each session's protocol violations and repairs, tagged
-with the station:
+`Superseded` and `Refused`, it carries each session's protocol violations, repairs and rate-limit
+episodes, tagged with the station:
 
 ```rust,no_run
 use ocpp_kit::transport::{CsmsHandle, SessionEvent};
@@ -290,6 +334,8 @@ while let Ok(event) = events.recv().await {
             }
         }
         SessionEvent::Violation { identity, violation } => println!("{identity}: {violation:?}"),
+        SessionEvent::RateLimited { identity } => println!("{identity} is over its rate"),
+        SessionEvent::Closed { identity, reason } => println!("{identity} left: {reason}"),
         _ => {}
     }
 }

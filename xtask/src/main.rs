@@ -90,7 +90,7 @@ fn doctest_site() -> Result<()> {
     if !rlib.exists() {
         bail!("{} is missing after a successful build", rlib.display());
     }
-    let deps = root.join("target/debug/deps");
+    let deps = dependency_dirs(&root.join("target/debug"))?;
 
     let mut pages: Vec<PathBuf> = Vec::new();
     collect_markdown(&root.join("site/content"), &mut pages)?;
@@ -106,9 +106,12 @@ fn doctest_site() -> Result<()> {
             .args(["--edition", "2024", "--test"])
             .arg(page)
             .arg("--extern")
-            .arg(format!("ocpp_kit={}", rlib.display()))
-            .arg("-L")
-            .arg(&deps);
+            .arg(format!("ocpp_kit={}", rlib.display()));
+        for dir in &deps {
+            rustdoc
+                .arg("-L")
+                .arg(format!("dependency={}", dir.display()));
+        }
         // Pages show `tokio::spawn`, so the snippets need to name it too.
         if let Some(tokio) = newest_rlib(&deps, "tokio")? {
             rustdoc
@@ -133,11 +136,49 @@ fn doctest_site() -> Result<()> {
     Ok(())
 }
 
-/// Finds the most recently built `lib<name>-<hash>.rlib` in a dependency directory.
-fn newest_rlib(deps: &Path, name: &str) -> Result<Option<PathBuf>> {
+/// Where cargo put the dependencies' `.rlib`s.
+///
+/// The classic layout keeps them all in `target/debug/deps`; the build-dir layout of newer
+/// cargo gives each unit its own `target/debug/build/<crate>/<hash>/out`. Both are searched,
+/// so the check does not depend on which cargo the maintainer happens to run.
+fn dependency_dirs(profile: &Path) -> Result<Vec<PathBuf>> {
+    let classic = profile.join("deps");
+    if classic.is_dir() {
+        return Ok(vec![classic]);
+    }
+    let mut dirs = Vec::new();
+    let build = profile.join("build");
+    for krate in
+        std::fs::read_dir(&build).with_context(|| format!("reading {}", build.display()))?
+    {
+        let krate = krate?.path();
+        if !krate.is_dir() {
+            continue;
+        }
+        for unit in std::fs::read_dir(&krate)? {
+            let out = unit?.path().join("out");
+            if out.is_dir() {
+                dirs.push(out);
+            }
+        }
+    }
+    if dirs.is_empty() {
+        bail!("no dependency directories under {}", profile.display());
+    }
+    Ok(dirs)
+}
+
+/// Finds the most recently built `lib<name>-<hash>.rlib` in the dependency directories.
+fn newest_rlib(deps: &[PathBuf], name: &str) -> Result<Option<PathBuf>> {
     let prefix = format!("lib{name}-");
     let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
-    for entry in std::fs::read_dir(deps).with_context(|| format!("reading {}", deps.display()))? {
+    for entry in deps
+        .iter()
+        .map(|dir| std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display())))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+    {
         let entry = entry?;
         let path = entry.path();
         let matches = path.extension().is_some_and(|e| e == "rlib")

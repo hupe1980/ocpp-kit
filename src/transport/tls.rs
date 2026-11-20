@@ -294,11 +294,20 @@ impl ClientTlsBuilder {
 }
 
 /// The server side of TLS, for a CSMS or a Local Controller.
+///
+/// Three ways to treat a client certificate, one constructor each:
+///
+/// | Constructor | Client certificate | Profile the authenticator sees |
+/// |---|---|---|
+/// | [`new`](Self::new) | never asked for | 2 |
+/// | [`with_client_auth`](Self::with_client_auth) | required | 3 |
+/// | [`with_optional_client_auth`](Self::with_optional_client_auth) | verified if presented | 3 with one, 2 without |
+///
+/// The profile is always derived from what the *connection* presented, never from this
+/// configuration — see [`Auth::profile`](super::Auth::profile).
 #[derive(Clone)]
 pub struct ServerTls {
     config: Arc<rustls::ServerConfig>,
-    /// Whether a client certificate is demanded — security profile 3.
-    mutual: bool,
 }
 
 impl ServerTls {
@@ -312,52 +321,86 @@ impl ServerTls {
             .with_single_cert(certs, key)?;
         Ok(Self {
             config: Arc::new(config),
-            mutual: false,
         })
     }
 
     /// Demands a client certificate issued under `client_roots` — security profile 3.
     ///
-    /// The verified end-entity certificate reaches the authenticator as
+    /// A station without one, or with one that does not verify (A00.FR.407), fails the TLS
+    /// handshake. The verified end-entity certificate reaches the authenticator as
     /// [`Credentials::ClientCertificate`](super::Credentials::ClientCertificate), so a CSMS
-    /// can still bind it to the identity in the URL.
+    /// can still bind it to the identity in the URL (A00.FR.405).
     pub fn with_client_auth(
         chain: impl AsRef<Path>,
         key: impl AsRef<Path>,
         client_roots: impl AsRef<Path>,
     ) -> Result<Self, TlsError> {
-        let certs = read_certs(chain.as_ref())?;
-        let key = read_key(key.as_ref())?;
+        Self::verifying_clients(chain.as_ref(), key.as_ref(), client_roots.as_ref(), false)
+    }
+
+    /// Verifies a client certificate when one is presented, and lets a station without one
+    /// through — profiles 2 and 3 on one listener.
+    ///
+    /// For a fleet in migration from Basic-over-TLS to client certificates. A presented
+    /// certificate is verified exactly as [`with_client_auth`](Self::with_client_auth)
+    /// verifies it — one that does not chain to `client_roots` still fails the handshake
+    /// (A00.FR.407); only its *absence* is tolerated.
+    ///
+    /// **The authenticator then owns A00.FR.002.** OCPP has one security profile per
+    /// station, and A00.FR.006 expects a CSMS serving two profiles to do so on two ports. On
+    /// one port, a station provisioned for profile 3 that connects without a certificate is
+    /// a downgrade — a leaked Basic password is all it takes — and only the CSMS's records
+    /// know the station was provisioned for 3. Compare [`Auth::profile`](super::Auth::profile)
+    /// with them and refuse a mismatch; the [`Authenticator`](super::Authenticator)
+    /// documentation shows the line.
+    pub fn with_optional_client_auth(
+        chain: impl AsRef<Path>,
+        key: impl AsRef<Path>,
+        client_roots: impl AsRef<Path>,
+    ) -> Result<Self, TlsError> {
+        Self::verifying_clients(chain.as_ref(), key.as_ref(), client_roots.as_ref(), true)
+    }
+
+    /// One verifier for both modes, so "optional" can only ever mean "may be absent", never
+    /// "need not verify".
+    fn verifying_clients(
+        chain: &Path,
+        key: &Path,
+        client_roots: &Path,
+        optional: bool,
+    ) -> Result<Self, TlsError> {
+        let certs = read_certs(chain)?;
+        let key = read_key(key)?;
         let mut roots = rustls::RootCertStore::empty();
-        for cert in read_certs(client_roots.as_ref())? {
+        for cert in read_certs(client_roots)? {
             roots.add(cert)?;
         }
-        let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
+        let mut verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
             Arc::new(roots),
             provider(),
-        )
-        .build()
-        .map_err(|error| TlsError::Pem(error.to_string()))?;
+        );
+        if optional {
+            verifier = verifier.allow_unauthenticated();
+        }
+        let verifier = verifier
+            .build()
+            .map_err(|error| TlsError::Pem(error.to_string()))?;
         let config = rustls::ServerConfig::builder_with_provider(provider())
             .with_safe_default_protocol_versions()?
             .with_client_cert_verifier(verifier)
             .with_single_cert(certs, key)?;
         Ok(Self {
             config: Arc::new(config),
-            mutual: true,
         })
     }
 
-    /// Wraps an existing `rustls` configuration.
+    /// Wraps a `rustls` configuration built by hand.
+    ///
+    /// Whatever its client-certificate policy, the profile each connection reports follows
+    /// from what that connection presented.
     #[must_use]
-    pub fn from_config(config: Arc<rustls::ServerConfig>, mutual: bool) -> Self {
-        Self { config, mutual }
-    }
-
-    /// Whether this configuration implements security profile 3.
-    #[must_use]
-    pub fn is_mutual(&self) -> bool {
-        self.mutual
+    pub fn from_config(config: Arc<rustls::ServerConfig>) -> Self {
+        Self { config }
     }
 
     pub(crate) fn acceptor(&self) -> tokio_rustls::TlsAcceptor {
@@ -367,9 +410,7 @@ impl ServerTls {
 
 impl fmt::Debug for ServerTls {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ServerTls")
-            .field("mutual", &self.mutual)
-            .finish_non_exhaustive()
+        f.debug_struct("ServerTls").finish_non_exhaustive()
     }
 }
 
