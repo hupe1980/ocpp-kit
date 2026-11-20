@@ -26,7 +26,8 @@ mod tls;
 mod ws;
 
 pub use connection::{
-    BoxFuture, Ctx, Event, Handle, Handler, Keepalive, NotImplemented, SessionContext, SessionState,
+    BoxFuture, Ctx, DisconnectReason, Event, Handle, Handler, Keepalive, NotImplemented,
+    SessionContext, SessionState,
 };
 pub use csms::{
     AcceptEveryStation, Auth, AuthOutcome, Authenticator, Csms, CsmsBuilder, CsmsHandle,

@@ -35,6 +35,14 @@ use core::fmt;
 
 use crate::types::{DateTime, Decimal};
 
+mod plan;
+#[cfg(feature = "v2_1")]
+pub mod v2x;
+mod wire;
+
+pub use plan::{Ceiling, ChargingPlan, PlanError, Planned, RateUnits, StationLimits, Target};
+pub use wire::ConversionError;
+
 /// The scale a limit converted between amperes and watts is rounded to.
 ///
 /// Amperes and watts convert by multiplying or dividing by `voltage × phases`, and division

@@ -118,6 +118,40 @@ For profile 3 the CSMS receives the verified end-entity certificate as
 without that check, any certificate your roots trust could impersonate any station. That one
 *is* your `Authenticator`'s job: only you know how your certificates carry an identity.
 
+### Profile 2 and 3 on one listener
+
+| Constructor | Client certificate | `Auth::profile` |
+|---|---|---|
+| `ServerTls::new(chain, key)` | never asked for | 2 |
+| `ServerTls::with_client_auth(chain, key, roots)` | required | 3 |
+| `ServerTls::with_optional_client_auth(chain, key, roots)` | verified if presented | 3 with one, 2 without |
+
+A presented certificate must still verify (A00.FR.407); only its absence is tolerated. A station
+has one profile (A00.FR.001), so on a mixed listener a profile-3 station connecting without its
+certificate is a downgrade the authenticator must refuse (A00.FR.002):
+
+```rust,no_run
+use ocpp_kit::transport::{Auth, AuthOutcome, Csms, SecurityProfile, ServerTls};
+
+# fn build() -> Result<(), Box<dyn std::error::Error>> {
+let csms = Csms::builder()
+    .bind("0.0.0.0:443".parse()?)
+    .tls(ServerTls::with_optional_client_auth("csms-chain.pem", "csms-key.pem", "station-roots.pem")?)
+    .authenticate(|auth: Auth| async move {
+        let Some(provisioned) = provisioned_profile(auth.identity.as_str()).await else {
+            return AuthOutcome::Unknown;
+        };
+        if auth.profile != provisioned {
+            return AuthOutcome::Reject; // A00.FR.002
+        }
+        check_credentials(&auth).await
+    })
+    .build()?;
+# Ok(()) }
+# async fn provisioned_profile(_: &str) -> Option<SecurityProfile> { None }
+# async fn check_credentials(_: &Auth) -> AuthOutcome { AuthOutcome::accept() }
+```
+
 ## Unsafe options are never the default
 
 Where an option is unsafe *and* leaves no evidence of itself, reaching it takes a sentence:
@@ -126,6 +160,7 @@ Where an option is unsafe *and* leaves no evidence of itself, reaching it takes 
 |---|---|---|
 | Signature verification | accept an unsigned frame | `SignaturePolicy::Optional`, named at the call site |
 | CSMS authentication | accept every station | `authenticate(AcceptEveryStation)`, or `build()` fails |
+| Client certificates | let a station without one through | `ServerTls::with_optional_client_auth`, which documents the A00.FR.002 check it hands you |
 
 A CSMS that authenticates nobody looks, in its own logs, exactly like one that authenticates
 everybody successfully — so `Csms::builder().bind(addr).build()` is an error, not a permissive

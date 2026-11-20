@@ -19,6 +19,7 @@ pub mod engine;
 pub mod message;
 pub mod metering;
 pub mod rpc;
+pub mod smart_charging;
 pub mod standard;
 #[cfg(feature = "station")]
 pub mod station;
