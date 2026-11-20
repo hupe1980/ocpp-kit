@@ -719,7 +719,7 @@ dependencies = [
 
 [[package]]
 name = "ocpp-kit"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "base64",
  "bytes",
@@ -1545,7 +1545,6 @@ name = "xtask"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "serde",
  "serde_json",
  "sha2",
 ]

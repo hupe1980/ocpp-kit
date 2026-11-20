@@ -148,6 +148,89 @@ mod peers {
         assert!(station.saw("Reset"));
     }
 
+    /// A CSMS controls a simulated vehicle over a real socket: its `SetChargingProfile` reaches a
+    /// wallbox through `MockStation::connect_with`, and the wallbox's meter values reach the CSMS.
+    #[tokio::test]
+    async fn a_csms_controls_a_simulated_vehicle_over_the_wire() {
+        use std::sync::{Arc, Mutex};
+
+        use ocpp_kit::engine::CallOptions;
+        use ocpp_kit::rpc::CallError;
+        use ocpp_kit::testkit::{Ev, Wallbox};
+        use ocpp_kit::types::Decimal;
+        use ocpp_kit::v2_1;
+
+        let csms = MockCsms::start().await.expect("the mock CSMS starts");
+        let start = "2026-11-20T18:00:00Z".parse().unwrap();
+        let wallbox = Arc::new(Mutex::new(Wallbox::new(Version::V2_1, start)));
+        let station = MockStation::connect_with(csms.url(), "CS-0004", {
+            let wallbox = wallbox.clone();
+            move |_, request| {
+                let mut wallbox = wallbox
+                    .lock()
+                    .map_err(|_| CallError::internal("poisoned"))?;
+                wallbox
+                    .answer(request)
+                    .unwrap_or_else(|| Err(CallError::not_implemented(&request.action)))
+            }
+        })
+        .expect("the station connects");
+        station.boot(Version::V2_1).await.expect("boot succeeds");
+
+        let plugged = wallbox
+            .lock()
+            .unwrap()
+            .plug_in(Ev::builder().reaction(Duration::ZERO).build())
+            .unwrap();
+        for out in plugged {
+            let payload = ocpp_kit::RawValue::from_string(out.payload).unwrap();
+            let options = CallOptions::default();
+            station
+                .handle()
+                .call_raw(out.action, payload, options)
+                .await
+                .expect("the CSMS answers");
+        }
+
+        let identity = station.identity().clone();
+        let profile: v2_1::SetChargingProfileRequest = ocpp_kit::decode::from_str(
+            r#"{"evseId":1,"chargingProfile":{"id":1,"stackLevel":0,
+                "chargingProfilePurpose":"TxDefaultProfile","chargingProfileKind":"Relative",
+                "chargingSchedule":[{"id":1,"chargingRateUnit":"A","chargingSchedulePeriod":[
+                {"startPeriod":0,"limit":8}]}]}}"#,
+        )
+        .unwrap();
+        let answer = csms
+            .handle()
+            .call(&identity, profile)
+            .await
+            .expect("the wallbox answers");
+        assert_eq!(answer.status, v2_1::ChargingProfileStatus::Accepted);
+
+        let sent = wallbox.lock().unwrap().advance(Duration::from_secs(60));
+        assert_eq!(
+            wallbox.lock().unwrap().ev().unwrap().reading().current,
+            Decimal::from(8)
+        );
+        for out in sent {
+            let payload = ocpp_kit::RawValue::from_string(out.payload).unwrap();
+            station
+                .handle()
+                .call_raw(out.action, payload, CallOptions::default())
+                .await
+                .expect("the CSMS answers");
+        }
+        assert!(
+            csms.wait_for("NotifyEVChargingNeeds", Duration::from_secs(5))
+                .await
+        );
+        assert!(
+            csms.exchanges()
+                .iter()
+                .any(|e| e.payload.contains("MeterValuePeriodic"))
+        );
+    }
+
     /// A mock that answers `CALLERROR` is how the failure paths get exercised.
     #[tokio::test]
     async fn a_mock_can_be_made_to_refuse() {

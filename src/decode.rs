@@ -383,6 +383,35 @@ pub fn decode_payload<T: DeserializeOwned + serde::Serialize + Validate>(
     decode_payload_reporting(payload, options).map(|decoded| decoded.value)
 }
 
+/// Decodes and validates one payload from JSON text, strictly: what a test, a fixture or a
+/// replayed log line needs, without a transport handler around it.
+///
+/// ```
+/// use ocpp_kit::{decode, v2_1};
+///
+/// let alarm: v2_1::NotifyDERAlarmRequest = decode::from_str(
+///     r#"{"controlType":"VoltWatt","timestamp":"2026-11-20T17:05:00Z"}"#,
+/// )?;
+/// assert_eq!(alarm.control_type, v2_1::DERControl::VoltWatt);
+///
+/// // Validated, not just parsed: a missing member is the error a CSMS would answer with.
+/// let error = decode::from_str::<v2_1::NotifyDERAlarmRequest>(r#"{"controlType":"VoltWatt"}"#)
+///     .unwrap_err();
+/// assert_eq!(error.kind, decode::DecodeErrorKind::Occurrence);
+/// # Ok::<(), decode::DecodeError>(())
+/// ```
+///
+/// # Errors
+///
+/// [`DecodeError`] exactly as [`decode_payload`] with [`DecodeOptions::strict`] reports it.
+pub fn from_str<T: DeserializeOwned + serde::Serialize + Validate>(
+    text: &str,
+) -> Result<T, DecodeError> {
+    let payload = RawValue::from_string(text.to_owned())
+        .map_err(|error| DecodeError::new(DecodeErrorKind::Format, "", error.to_string()))?;
+    decode_payload(&payload, &DecodeOptions::strict())
+}
+
 /// [`decode_payload`], also returning every [`Repair`] the lenient options applied.
 pub fn decode_payload_reporting<T: DeserializeOwned + serde::Serialize + Validate>(
     payload: &RawValue,

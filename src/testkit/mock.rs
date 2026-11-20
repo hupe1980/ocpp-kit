@@ -68,17 +68,33 @@ fn default_answer(ctx: &Ctx, request: &IncomingRequest) -> Result<Box<RawValue>,
         }
         "Heartbeat" => format!(r#"{{"currentTime":"{now}"}}"#),
         "Authorize" => r#"{"idTokenInfo":{"status":"Accepted"}}"#.to_owned(),
+        // 1.6: the CSMS assigns the transaction id; a fresh one per call.
+        "StartTransaction" => {
+            static NEXT: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(1);
+            let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            format!(r#"{{"transactionId":{id},"idTagInfo":{{"status":"Accepted"}}}}"#)
+        }
         "TransactionEvent"
         | "StatusNotification"
+        | "StopTransaction"
         | "NotifyEvent"
         | "NotifyReport"
         | "MeterValues"
         | "SecurityEventNotification"
         | "LogStatusNotification"
-        | "FirmwareStatusNotification" => "{}".to_owned(),
+        | "FirmwareStatusNotification"
+        | "NotifyDERAlarm"
+        | "NotifyDERStartStop"
+        | "ReportDERControl" => "{}".to_owned(),
         // Station side.
-        "Reset" | "ChangeAvailability" | "UnlockConnector" | "TriggerMessage" | "SetVariables"
-        | "GetVariables" | "ClearCache" => r#"{"status":"Accepted"}"#.to_owned(),
+        "NotifyEVChargingNeeds"
+        | "Reset"
+        | "ChangeAvailability"
+        | "UnlockConnector"
+        | "TriggerMessage"
+        | "SetVariables"
+        | "GetVariables"
+        | "ClearCache" => r#"{"status":"Accepted"}"#.to_owned(),
         _ => return Err(CallError::not_implemented(&request.action)),
     };
     let _ = ctx;
@@ -249,11 +265,44 @@ impl MockStation {
     /// Returns as soon as the session is spawned; the connection itself is established in the
     /// background, exactly as a real station's is. Await the first call to know it is up.
     pub fn connect(url: &str, identity: &str) -> Result<Self, TransportError> {
+        Self::connect_with(url, identity, default_answer)
+    }
+
+    /// Connects a station that answers the CSMS with `answer` — a [`Wallbox`](super::Wallbox),
+    /// typically, so a CSMS under test controls a simulated vehicle over a real socket.
+    ///
+    /// ```no_run
+    /// # async fn example(url: &str) -> Result<(), Box<dyn std::error::Error>> {
+    /// use std::sync::{Arc, Mutex};
+    /// use ocpp_kit::Version;
+    /// use ocpp_kit::rpc::CallError;
+    /// use ocpp_kit::testkit::{MockStation, Wallbox};
+    ///
+    /// let wallbox = Arc::new(Mutex::new(Wallbox::new(Version::V2_1, "2026-11-20T18:00:00Z".parse()?)));
+    /// let station = MockStation::connect_with(url, "CS-0001", {
+    ///     let wallbox = wallbox.clone();
+    ///     move |_, request| {
+    ///         let mut wallbox = wallbox.lock().map_err(|_| CallError::internal("poisoned"))?;
+    ///         wallbox
+    ///             .answer(request)
+    ///             .unwrap_or_else(|| Err(CallError::not_implemented(&request.action)))
+    ///     }
+    /// })?;
+    /// # let _ = station; Ok(()) }
+    /// ```
+    pub fn connect_with(
+        url: &str,
+        identity: &str,
+        answer: impl Fn(&Ctx, &IncomingRequest) -> Result<Box<RawValue>, CallError>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Result<Self, TransportError> {
         let recording = Arc::new(Recording {
             seen: Mutex::new(Vec::new()),
             identity: Identity::new(identity)
                 .map_err(|error| TransportError::Configuration(error.to_string()))?,
-            answer: Box::new(default_answer),
+            answer: Box::new(answer),
         });
         let handle = Station::builder()
             .identity(identity)?

@@ -11,7 +11,7 @@ repository = "https://github.com/hupe1980/ocpp-kit"
 
 [package]
 name = "ocpp-kit"
-version = "0.6.0"
+version = "0.7.0"
 edition.workspace = true
 rust-version.workspace = true
 description = "Open Charge Point Protocol (OCPP 1.6J, 2.0.1, 2.1) toolkit for Rust: typed messages, OCPP-J framing, a sans-I/O protocol engine, and transports for charging stations, CSMS and local controllers."
@@ -109,6 +109,10 @@ name = "domain_events"
 required-features = ["csms", "v1_6", "v2_0_1", "v2_1"]
 
 [[test]]
+name = "ev_simulator"
+required-features = ["testkit", "csms", "v1_6", "v2_0_1", "v2_1"]
+
+[[test]]
 name = "engine_rules"
 required-features = ["testkit"]
 
@@ -172,7 +176,8 @@ rustls = [
     "dep:webpki-roots",
     "dep:webpki",
 ]
-tracing = ["dep:tracing"]
+# Spans and events from the transport, which is the only part with anything to trace.
+tracing = ["tokio", "dep:tracing"]
 cli = ["tokio", "station", "csms", "v1_6", "v2_0_1", "v2_1", "dep:tokio", "tokio/rt-multi-thread"]
 full = ["tokio", "rustls", "tracing", "station", "csms", "cli", "compression", "signed-messages", "jws-es256", "getrandom", "testkit"]
 

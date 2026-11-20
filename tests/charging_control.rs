@@ -430,3 +430,34 @@ fn every_v2x_message_validates_against_the_21_schemas() {
     // A domain `Profile` still refuses a V2X period: it is a ceiling schedule.
     assert!(Profile::from_v2_1(&request.charging_profile, 1).is_err());
 }
+
+/// The specification's own DER examples (R04 scenario #1, R01) pass `der::check` and the 2.1
+/// schema alike, and a request `check` refuses is still schema-valid — the check catches what
+/// the schema cannot.
+#[test]
+fn der_controls_the_check_accepts_are_schema_valid_and_it_refuses_what_the_schema_cannot() {
+    use ocpp_kit::smart_charging::der::{DerRule, check};
+
+    let accepted = [
+        r#"{"isDefault":true,"controlId":"droop","controlType":"FreqDroop","freqDroop":{
+            "priority":0,"overFreq":50.2,"underFreq":49.8,"overDroop":5,"underDroop":5,
+            "responseTime":1}}"#,
+        r#"{"isDefault":true,"controlId":"vw","controlType":"VoltWatt","curve":{"priority":0,
+            "yUnit":"PctMaxW","curveData":[{"x":106,"y":100},{"x":110,"y":0}]}}"#,
+        r#"{"isDefault":true,"controlId":"lmd","controlType":"LimitMaxDischarge",
+            "limitMaxDischarge":{"priority":0,"pctMaxDischargePower":50.0}}"#,
+    ];
+    for json in accepted {
+        let request: v2_1::SetDERControlRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(check(&request), Ok(()), "{json}");
+        schema_check_action("SetDERControl", false, &request);
+    }
+
+    let refused: v2_1::SetDERControlRequest = serde_json::from_str(
+        r#"{"isDefault":true,"controlId":"vw","controlType":"VoltWatt","curve":{"priority":0,
+            "yUnit":"PctMaxVar","curveData":[{"x":106,"y":100}]}}"#,
+    )
+    .unwrap();
+    schema_check_action("SetDERControl", false, &refused);
+    assert!(matches!(check(&refused), Err(DerRule::WrongYUnit { .. })));
+}

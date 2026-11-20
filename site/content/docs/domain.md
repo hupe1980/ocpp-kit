@@ -383,9 +383,82 @@ let every_second = follow.update_setpoint(Setpoint::discharge(w(2400))?)?;
 
 A V2X plan merges only identical neighbours (setpoints are targets, not ceilings).
 
-`EvV2x::from_v2_1(&needs)` reads the EV's charge and discharge range from
-`NotifyEVChargingNeedsRequest` as magnitudes in W, summed over `_L2`/`_L3` when given;
-`clamp_watts` fits a setpoint into it and refuses discharge unless the transfer is bidirectional.
+### What the EV needs
+
+`EvNeeds` reads `NotifyEVChargingNeedsRequest` from 2.0.1 and 2.1 alike — the AC, DC and V2X
+parameter sets, which use different units and phase conventions — into one view:
+
+```rust
+use ocpp_kit::decode;
+use ocpp_kit::smart_charging::{EvNeeds, Supply};
+use ocpp_kit::types::Decimal;
+use ocpp_kit::v2_0_1::NotifyEVChargingNeedsRequest;
+
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let request: NotifyEVChargingNeedsRequest = decode::from_str(r#"{"evseId": 1, "chargingNeeds": {
+    "requestedEnergyTransfer": "AC_three_phase", "departureTime": "2026-11-21T07:00:00Z",
+    "acChargingParameters": {"energyAmount": 20000, "evMinCurrent": 6, "evMaxCurrent": 16, "evMaxVoltage": 400}}}"#)?;
+let needs = EvNeeds::from_v2_0_1(&request.charging_needs);
+assert_eq!(needs.energy, Some(Decimal::from(20_000)));               // Wh
+assert_eq!(needs.phases, Some(3));                                  // from the transfer mode
+assert_eq!(needs.max_charge_power(Supply::default()), Some(Decimal::from(11_040)));
+# Ok(()) }
+```
+
+AC currents are amperes **per phase**; V2X powers are magnitudes in W, summed over `_L2`/`_L3`
+when given (the plain field is then L1 only). `clamp_watts` (2.1) fits a setpoint into what the
+EV can do and refuses discharge unless the transfer is bidirectional.
+
+### DER control (2.1)
+
+A bidirectional station is a distributed energy resource, and a network operator's grid code
+reaches it as DER controls: volt-watt and frequency-watt curves, a frequency droop, trip curves, a
+cap on discharge. The station executes them. A planner has to *read* them, because a discharge a
+DER control can lower or stop is one it must not count on. `smart_charging::der` collects the
+report, applies the precedence rules, and answers that question:
+
+```rust
+use ocpp_kit::decode;
+use ocpp_kit::smart_charging::der::{AlarmChange, DerAlarmState, DerReport};
+use ocpp_kit::types::DateTime;
+use ocpp_kit::v2_1::{NotifyDERAlarmRequest, ReportDERControlRequest};
+
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+// The station's answer to GetDERControl { requestId: 7 }, in one part.
+let part: ReportDERControlRequest = decode::from_str(r#"{"requestId": 7, "curve": [
+    {"id": "vw", "curveType": "VoltWatt", "isDefault": true, "isSuperseded": false,
+     "curve": {"priority": 0, "yUnit": "PctMaxW", "curveData": [{"x": 106, "y": 100}, {"x": 110, "y": 0}]}},
+    {"id": "vv", "curveType": "VoltVar", "isDefault": true, "isSuperseded": false,
+     "curve": {"priority": 0, "yUnit": "PctMaxVar", "curveData": [{"x": 93, "y": 30}, {"x": 107, "y": -30}]}}
+]}"#)?;
+let mut report = DerReport::new(7);
+report.add(&part)?;
+let controls = report.finish()?;
+
+let now: DateTime = "2026-11-20T17:00:00Z".parse()?;
+// VoltWatt can lower active power; VoltVar only takes reactive headroom.
+let limiting: Vec<_> = controls.limiting_at(now).iter().map(|c| c.id.clone()).collect();
+assert_eq!(limiting, ["vw"]);
+
+// The station says the curve is taking over.
+let mut alarm = DerAlarmState::new();
+let notice: NotifyDERAlarmRequest = decode::from_str(
+    r#"{"controlType": "VoltWatt", "gridEventFault": "OverVoltage", "timestamp": "2026-11-20T17:05:00Z"}"#)?;
+assert_eq!(alarm.apply(&notice), AlarmChange::Raised);
+# Ok(()) }
+```
+
+| Trap in block R | Here |
+|---|---|
+| Which control is in effect is a rule (§2.9, R04.FR.09–11): a running scheduled control beats the default, the lowest `priority` value wins, a superseded one never runs | `DerControls::effective(kind, t)` / `effective_at(t)` |
+| A report arrives in parts with one `requestId`, `tbc` on all but the last (R04.FR.31/32) | `DerReport` refuses a stray part, a part after the last, duplicate ids, a negative duration, and more than 1 024 controls |
+| `NotifyDERStartStop` supersedes controls and ends them (R04.FR.20–22) | `DerControls::apply` returns what changed; an unknown id means "ask again" |
+| "There are no multiple levels of alarm" (R05.FR.04): a takeover is never ended | `DerAlarmState` holds one alarm; `Replaced(previous)`, `Repeated`, `Cleared`, `Unmatched` |
+| A `SetDERControlRequest` carries exactly the field its type maps to, defaults have no schedule, each curve type has its `yUnit` (R04.FR.13/15/17/50–56) | `der::check(&request)` names the rule it breaks |
+| `pctMaxDischargePower` is a trip threshold in §2.64 and the cap itself in R01/R02 | carried as reported; no watt figure is computed from it |
+
+Executing the curves needs grid measurements and is the inverter's job, so it is not here. A
+control type the crate does not know counts as limiting.
 
 ## CSMS-side (`csms`)
 

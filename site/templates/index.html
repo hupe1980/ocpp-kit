@@ -55,7 +55,7 @@
     <article class="card">
       <h3>Domain blocks</h3>
       <p>Device model, transaction rules, local authorization, an idempotent CSMS ledger,
-      per-phase telemetry, and smart charging from plan to wire — V2X included. Components, not
+      per-phase telemetry, smart charging from plan to wire, V2X and DER control. Components, not
       a framework.</p>
       <a href="{{ get_url(path='@/docs/domain.md') }}">Layer 4 →</a>
     </article>
@@ -122,6 +122,12 @@
       schema-valid payloads and validated back against the official schema — over 9 000 round
       trips per test run.</p>
       <a href="{{ get_url(path='@/docs/testing.md') }}">How it is verified →</a>
+    </article>
+    <article class="card">
+      <h3>A vehicle to test against</h3>
+      <p>A simulated EV that reacts late, stops below 6 A and stalls on a phase switch, plugged
+      into a wallbox that speaks 1.6, 2.0.1 or 2.1 — a night of charging in milliseconds.</p>
+      <a href="{{ get_url(path='@/docs/testing.md') }}">The testkit →</a>
     </article>
     <article class="card">
       <h3>Compression, because 2.1 requires it</h3>

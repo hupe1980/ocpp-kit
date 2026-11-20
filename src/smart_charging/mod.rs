@@ -35,11 +35,17 @@ use core::fmt;
 
 use crate::types::{DateTime, Decimal};
 
+#[cfg(feature = "v2_1")]
+pub mod der;
+#[cfg(any(feature = "v2_0_1", feature = "v2_1"))]
+mod needs;
 mod plan;
 #[cfg(feature = "v2_1")]
 pub mod v2x;
 mod wire;
 
+#[cfg(any(feature = "v2_0_1", feature = "v2_1"))]
+pub use needs::EvNeeds;
 pub use plan::{Ceiling, ChargingPlan, PlanError, Planned, RateUnits, StationLimits, Target};
 pub use wire::ConversionError;
 
