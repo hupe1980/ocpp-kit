@@ -65,8 +65,9 @@ bytes = "1.7"
 base64 = "0.22"
 tokio-util = { version = "0.7.11", features = ["codec"] }
 futures-util = { version = "0.3.31", features = ["sink"] }
-# For `examples/sqlite_store.rs` only. 0.41 needs Rust 1.89; 0.40 still builds on our MSRV.
-rusqlite = { version = "0.40", features = ["bundled"] }
+# For `examples/sqlite_store.rs` only. 0.41 (SQLite 3.54, RUSTSEC-2026-0459) needs Rust 1.89, which
+# is fine for a dev-dependency: the MSRV job checks what users compile, `--lib --bins`.
+rusqlite = { version = "0.41", features = ["bundled"] }
 
 # The examples are whole programs: a station and a CSMS. They need the transport and the
 # domain blocks, so `cargo test`/`cargo build` must not try to compile them without those.
