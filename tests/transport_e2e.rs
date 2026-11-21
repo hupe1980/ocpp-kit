@@ -1849,32 +1849,35 @@ mod edge {
 
     // --- story 1: the station says why ---------------------------------------------------
 
-    /// SC-002: the cause is kept, not broadcast — asking after the fact never races.
+    /// The cause is kept, not broadcast: asking after the fact never races. The peer accepts
+    /// and hangs up, which fails fast on every OS (a refused port takes ~2 s on Windows).
     #[tokio::test]
     async fn edge_station_learns_why_after_the_fact_every_time() {
-        let port = {
-            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            listener.local_addr().unwrap().port()
-        }; // nothing listens here any more
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                drop(socket);
+            }
+        });
         for _ in 0..1_000 {
-            let handle = builder(port, "CS-NOBODY", &[Version::V2_1])
+            let handle = builder(port, "CS-HANGUP", &[Version::V2_1])
                 .build()
                 .unwrap()
                 .spawn()
                 .unwrap();
-            while handle.ended().is_none() {
-                tokio::time::sleep(Duration::from_millis(1)).await;
-            }
+            let first = tokio::time::timeout(Duration::from_secs(5), handle.closed())
+                .await
+                .expect("the station ends");
+            assert!(matches!(first, Ended::ConnectFailed(_)), "{first}");
+            // A clone made after the end asks again: answered at once, with the same cause.
             let late = handle.clone();
             let ended = tokio::time::timeout(Duration::from_millis(100), late.closed())
                 .await
                 .expect("an ended station answers at once");
-            assert!(
-                matches!(&ended, Ended::ConnectFailed(e) if matches!(**e, TransportError::Io(_))),
-                "{ended}"
-            );
+            assert_eq!(ended.to_string(), first.to_string());
             let ready = late.wait_ready().await.unwrap_err();
-            assert_eq!(ready.to_string(), ended.to_string());
+            assert_eq!(ready.to_string(), first.to_string());
         }
     }
 
