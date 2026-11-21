@@ -21,12 +21,15 @@ async fn boot(handler: impl Handler) -> Result<(), Box<dyn std::error::Error>> {
         .build()?
         .spawn()?;
 
-    let boot = handle
-        .call(v2_1::BootNotificationRequest::new(
-            v2_1::ChargingStation::new("Model-1", "ACME"),
-            v2_1::BootReason::PowerUp,
-        ))
-        .await?;
+    let request = v2_1::BootNotificationRequest::new(
+        v2_1::ChargingStation::new("Model-1", "ACME"),
+        v2_1::BootReason::PowerUp,
+    );
+    let boot = tokio::select! {
+        boot = handle.call(request) => boot?,
+        // Stopped? Then say why: a 401, a missing subprotocol, a TLS error.
+        ended = handle.closed() => return Err(ended.into()),
+    };
 
     println!("{:?}, heartbeat every {}s", boot.status, boot.interval);
     Ok(())

@@ -14,7 +14,9 @@ use ocpp_kit::rpc::CallError;
 use ocpp_kit::station::transactions::{
     Conditions, RandomTransactionIds, TransactionMachine, TxEvent,
 };
-use ocpp_kit::transport::{BasicAuthPassword, BoxFuture, Ctx, Handler, SecurityProfile, Station};
+use ocpp_kit::transport::{
+    BasicAuthPassword, BoxFuture, Ctx, Event, Handler, SecurityProfile, Station,
+};
 use ocpp_kit::types::DateTime;
 use ocpp_kit::{Version, decimal, v2_1};
 
@@ -72,19 +74,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
     let handle = station.spawn()?;
 
+    // Every failed attempt says why — a wrong password, a CSMS that serves another version, a
+    // TLS problem — before the station backs off and tries again.
+    let mut events = handle.events();
+    tokio::spawn(async move {
+        while let Ok(event) = events.recv().await {
+            if let Event::ConnectFailed { attempt, error, .. } = event {
+                eprintln!("attempt {attempt} failed: {error}");
+            }
+        }
+    });
+
     // B01 — nothing else may be sent until the CSMS accepts the station, and the engine
     // enforces that for us: anything queued now goes out the moment `Accepted` arrives.
-    let boot = handle
-        .call(v2_1::BootNotificationRequest::new(
-            v2_1::ChargingStation::new("Model-1", "ACME").with_serial_number("SN-42"),
-            v2_1::BootReason::PowerUp,
-        ))
-        .await?;
+    let request = v2_1::BootNotificationRequest::new(
+        v2_1::ChargingStation::new("Model-1", "ACME").with_serial_number("SN-42"),
+        v2_1::BootReason::PowerUp,
+    );
+    let boot = tokio::select! {
+        boot = handle.call(request) => boot?,
+        ended = handle.closed() => return Err(ended.into()),
+    };
     println!(
         "-> BootNotification: {:?} (heartbeat every {}s)",
         boot.status, boot.interval
     );
-    handle.wait_ready().await;
+    // Ready, or why not: `could not connect: the CSMS rejected the handshake with HTTP 401`.
+    handle.wait_ready().await?;
 
     // A short transaction, driven by the same start/stop rules a real station uses.
     // `with_defaults` is Table 62's OCPP 1.6-compatible configuration: start once the driver

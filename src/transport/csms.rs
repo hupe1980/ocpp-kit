@@ -3,9 +3,13 @@
 //! The HTTP upgrade is performed here rather than delegated, because OCPP puts requirements
 //! on it that a synchronous callback cannot meet:
 //! authentication is a database lookup (so it must be `async`), an unknown Charging Station
-//! identity should be answered with **404**, bad credentials with **401**, and a client whose
-//! subprotocols the CSMS cannot speak must get a *successful* handshake **without** a
-//! `Sec-WebSocket-Protocol` header followed by an immediate close (Part 4 §3.1.1).
+//! identity should be answered with **404** (Part 4 §3.2; §3.3 in 2.1), bad credentials with
+//! **401** (HTTP Basic, Part 2 A00), and a client whose subprotocols the CSMS does not agree to
+//! must get a *successful* handshake **without** a `Sec-WebSocket-Protocol` header followed by
+//! an immediate close (the same section).
+//!
+//! Every connection the CSMS turns away is one [`SessionEvent::Refused`] with a typed
+//! [`Refusal`]; what the *peer* sees does not depend on it beyond the HTTP status.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -26,8 +30,8 @@ use crate::version::{Subprotocol, Version};
 
 use super::TransportError;
 use super::connection::{
-    BoxFuture, DisconnectReason, Driver, Handle, Handler, Keepalive, SessionContext, SessionState,
-    Shared,
+    BoxFuture, DisconnectReason, Driver, EndGuard, Ended, Escaped, Handle, Handler, Keepalive,
+    SessionContext, SessionState, Shared,
 };
 use super::security::{Credentials, SecurityProfile};
 use super::stream::MaybeTls;
@@ -71,24 +75,82 @@ pub struct Auth {
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum AuthOutcome {
-    /// Let it in, carrying whatever the authenticator resolved about it.
-    ///
-    /// The authenticator has already looked the station up to decide this; hanging the result
-    /// on the session spares every handler the same lookup. [`AuthOutcome::accept()`] is the
-    /// short spelling for carrying nothing. See [`SessionContext`].
-    Accept(SessionContext),
+    /// Let it in — see [`Admission`] for what can come with it.
+    Accept(Admission),
     /// The credentials are wrong — answered with HTTP 401.
     Reject,
-    /// The identity is not provisioned — answered with HTTP 404, as Part 4 §3.1.1 suggests,
-    /// so an operator can tell a typo from a bad password.
+    /// The identity is not provisioned — answered with HTTP 404, as Part 4 §3.2 (2.1: §3.3)
+    /// suggests, so an operator can tell a typo from a bad password.
     Unknown,
 }
 
 impl AuthOutcome {
-    /// Let the station in, carrying nothing.
+    /// Let the station in, carrying nothing, on whichever served version it prefers.
     #[must_use]
     pub const fn accept() -> Self {
-        Self::Accept(SessionContext::empty())
+        Self::Accept(Admission::new())
+    }
+}
+
+impl From<Admission> for AuthOutcome {
+    fn from(admission: Admission) -> Self {
+        Self::Accept(admission)
+    }
+}
+
+/// How a Charging Station is let in: what the authenticator resolved about it, and the
+/// version it must use.
+///
+/// The authenticator has already looked the station up to decide; hanging the result on the
+/// session ([`context`](Self::context)) spares every handler the same lookup — see
+/// [`SessionContext`]. Pinning the [`version`](Self::version) makes the CSMS serve exactly
+/// that one: the client lists its versions "in order of preference" (Part 4 §3.1.2), but it is
+/// the CSMS that agrees or not (§3.2; 2.1 §3.3).
+///
+/// ```
+/// use ocpp_kit::transport::{Admission, Auth, AuthOutcome};
+/// use ocpp_kit::Version;
+///
+/// struct ChargePoint { row_id: i64, version: Version }
+///
+/// async fn authenticate(auth: Auth) -> AuthOutcome {
+///     let point = ChargePoint { row_id: 42, version: Version::V2_0_1 }; // a lookup, really
+///     // Offered [2.1, 2.0.1] → served 2.0.1. Offered [2.1] → refused like no common version.
+///     Admission::new().version(point.version).context(point).into()
+/// }
+/// # let _ = authenticate;
+/// ```
+#[derive(Clone, Debug, Default)]
+pub struct Admission {
+    context: SessionContext,
+    version: Option<Version>,
+}
+
+impl Admission {
+    /// An admission carrying nothing, on whichever served version the station prefers.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            context: SessionContext::empty(),
+            version: None,
+        }
+    }
+
+    /// Hangs `value` on the session, for handlers to read through
+    /// [`Ctx::session`](super::Ctx::session) and [`Handle::session`].
+    #[must_use]
+    pub fn context<T: core::any::Any + Send + Sync>(mut self, value: T) -> Self {
+        self.context = SessionContext::new(value);
+        self
+    }
+
+    /// Serves exactly `version`. A station that did not offer it — or a CSMS that does not
+    /// serve it — is refused the way Part 4 §3.2 prescribes (handshake without a subprotocol,
+    /// then close), with [`Refusal::VersionNotOffered`]; never with another version.
+    #[must_use]
+    pub const fn version(mut self, version: Version) -> Self {
+        self.version = Some(version);
+        self
     }
 }
 
@@ -221,15 +283,125 @@ pub enum SessionEvent {
         /// What was forgiven, and where.
         repairs: Vec<crate::decode::Repair>,
     },
-    /// A connection was refused during the handshake.
+    /// A connection was turned away — exactly one event per connection, with why.
+    ///
+    /// A peer that closes before sending a complete request (a TCP health probe) is not
+    /// reported: nothing was asked, so nothing was refused.
     Refused {
         /// The identity it claimed, when the path carried a usable one.
         identity: Option<Identity>,
-        /// The HTTP status that was returned.
-        status: u16,
         /// Where it connected from.
         remote: SocketAddr,
+        /// Why; [`Refusal::status`] is the HTTP status the peer received, if any.
+        reason: Refusal,
     },
+}
+
+/// Why the CSMS turned a connection away.
+///
+/// Local knowledge for the operator: the peer sees only the HTTP status (both kinds of `401`
+/// get the identical response) and, for the `101` cases, the same handshake and close frame.
+///
+/// ```
+/// use ocpp_kit::transport::Refusal;
+/// use ocpp_kit::Version;
+/// let reason = Refusal::VersionNotOffered { required: Version::V2_0_1, offered: vec![Version::V2_1] };
+/// assert_eq!(reason.status(), Some(101));
+/// assert_eq!(reason.to_string(), "the station must use OCPP 2.0.1 but offered [2.1]");
+/// assert_eq!(Refusal::UsernameMismatch.status(), Some(401));
+/// ```
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub enum Refusal {
+    /// Not a valid WebSocket upgrade (RFC 6455 §4.2.1): no `Upgrade`, no key, or a
+    /// `Sec-WebSocket-Version` other than 13.
+    BadUpgrade {
+        /// 400, or 426 for an unsupported WebSocket version (RFC 6455 §4.4).
+        status: u16,
+    },
+    /// The path carries no usable Charging Station identity (Part 4 §3.1.1).
+    NoIdentity,
+    /// The Basic username is not the identity in the URL (A00.FR.204/207).
+    UsernameMismatch,
+    /// The [`Authenticator`] rejected the credentials.
+    Rejected,
+    /// The [`Authenticator`] does not know the identity.
+    Unknown,
+    /// [`CsmsBuilder::max_connections`] sessions are already open.
+    AtCapacity,
+    /// None of the offered versions is served (Part 4 §3.2; 2.1 §3.3).
+    NoCommonVersion {
+        /// What the station offered, most preferred first.
+        offered: Vec<Version>,
+    },
+    /// The authenticator pinned a version ([`Admission::version`]) that the station did not
+    /// offer, or that this CSMS does not serve.
+    VersionNotOffered {
+        /// The pinned version.
+        required: Version,
+        /// What the station offered, most preferred first.
+        offered: Vec<Version>,
+    },
+    /// A session for this identity is already open and
+    /// [`supersede_existing`](CsmsBuilder::supersede_existing) is off; the newer connection was closed with
+    /// 1008 "already connected".
+    Duplicate,
+    /// The handshake did not finish within [`CsmsBuilder::handshake_timeout`].
+    TimedOut,
+    /// The handshake failed: TLS, I/O, or a malformed request.
+    Failed(Arc<TransportError>),
+}
+
+impl Refusal {
+    /// The HTTP status the peer received: `101` for the cases the WebSocket handshake
+    /// completed and was then closed, `None` when no response was sent.
+    #[must_use]
+    pub const fn status(&self) -> Option<u16> {
+        match self {
+            Self::BadUpgrade { status } => Some(*status),
+            Self::NoIdentity => Some(400),
+            Self::UsernameMismatch | Self::Rejected => Some(401),
+            Self::Unknown => Some(404),
+            Self::AtCapacity => Some(503),
+            Self::NoCommonVersion { .. } | Self::VersionNotOffered { .. } | Self::Duplicate => {
+                Some(101)
+            }
+            Self::TimedOut | Self::Failed(_) => None,
+        }
+    }
+}
+
+impl core::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let versions = |offered: &[Version]| {
+            offered
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        match self {
+            Self::BadUpgrade { status } => write!(f, "not a WebSocket upgrade (HTTP {status})"),
+            Self::NoIdentity => f.write_str("no Charging Station identity in the path"),
+            Self::UsernameMismatch => {
+                f.write_str("the Basic username is not the identity in the URL")
+            }
+            Self::Rejected => f.write_str("the authenticator rejected the credentials"),
+            Self::Unknown => f.write_str("the authenticator does not know the identity"),
+            Self::AtCapacity => f.write_str("the CSMS is at max_connections"),
+            Self::NoCommonVersion { offered } => {
+                write!(f, "no common OCPP version; offered [{}]", versions(offered))
+            }
+            Self::VersionNotOffered { required, offered } => write!(
+                f,
+                "the station must use OCPP {required} but offered [{}]",
+                versions(offered)
+            ),
+            Self::Duplicate => f.write_str("a session for this identity is already open"),
+            Self::TimedOut => f.write_str("the handshake timed out"),
+            Self::Failed(error) => write!(f, "handshake failed: {}", Escaped(&error.to_string())),
+        }
+    }
 }
 
 /// Builds a [`Csms`].
@@ -608,20 +780,27 @@ impl Csms {
             let server = server.clone();
             tokio::spawn(async move {
                 let timeout = server.handshake_timeout;
+                let events = server.events.clone();
                 let outcome = tokio::time::timeout(timeout, server.accept(stream, remote)).await;
                 drop(permit);
-                match outcome {
-                    Ok(Ok(())) => {}
+                let reason = match outcome {
+                    Ok(Ok(()) | Err(TransportError::Closed)) => return,
                     Ok(Err(error)) => {
                         #[cfg(feature = "tracing")]
                         tracing::debug!(%remote, %error, "connection rejected");
-                        let _ = error;
+                        Refusal::Failed(Arc::new(error))
                     }
                     Err(_) => {
                         #[cfg(feature = "tracing")]
                         tracing::debug!(%remote, ?timeout, "handshake timed out");
+                        Refusal::TimedOut
                     }
-                }
+                };
+                let _ = events.send(SessionEvent::Refused {
+                    identity: None,
+                    remote,
+                    reason,
+                });
             });
         }
     }
@@ -660,9 +839,15 @@ impl Csms {
         // RFC 6455 §4.2.1 / §4.4 — answer a malformed upgrade rather than dropping the
         // socket, so an operator can see why.
         if let Some(defect) = request.upgrade_defect() {
-            let (status, reason) = defect.status();
-            self.refuse(&mut socket, request.identity(), status, reason, remote)
-                .await;
+            let (status, phrase) = defect.status();
+            self.refuse(
+                &mut socket,
+                request.identity(),
+                (status, phrase),
+                Refusal::BadUpgrade { status },
+                remote,
+            )
+            .await;
             return Ok(());
         }
         let identity = request.identity();
@@ -679,8 +864,14 @@ impl Csms {
         };
 
         let Some(identity) = identity else {
-            self.refuse(&mut socket, None, 400, "Bad Request", remote)
-                .await;
+            self.refuse(
+                &mut socket,
+                None,
+                (400, "Bad Request"),
+                Refusal::NoIdentity,
+                remote,
+            )
+            .await;
             return Ok(());
         };
 
@@ -703,8 +894,14 @@ impl Csms {
                     %remote,
                     "the Basic username does not match the URL identity (A00.FR.204/207)"
                 );
-                self.refuse(&mut socket, Some(identity), 401, "Unauthorized", remote)
-                    .await;
+                self.refuse(
+                    &mut socket,
+                    Some(identity),
+                    (401, "Unauthorized"),
+                    Refusal::UsernameMismatch,
+                    remote,
+                )
+                .await;
                 return Ok(());
             }
         }
@@ -719,16 +916,28 @@ impl Csms {
             offered: offered.clone(),
         };
 
-        let session = match self.authenticator.authenticate(auth).await {
-            AuthOutcome::Accept(session) => session,
+        let admission = match self.authenticator.authenticate(auth).await {
+            AuthOutcome::Accept(admission) => admission,
             AuthOutcome::Reject => {
-                self.refuse(&mut socket, Some(identity), 401, "Unauthorized", remote)
-                    .await;
+                self.refuse(
+                    &mut socket,
+                    Some(identity),
+                    (401, "Unauthorized"),
+                    Refusal::Rejected,
+                    remote,
+                )
+                .await;
                 return Ok(());
             }
             AuthOutcome::Unknown => {
-                self.refuse(&mut socket, Some(identity), 404, "Not Found", remote)
-                    .await;
+                self.refuse(
+                    &mut socket,
+                    Some(identity),
+                    (404, "Not Found"),
+                    Refusal::Unknown,
+                    remote,
+                )
+                .await;
                 return Ok(());
             }
         };
@@ -737,24 +946,32 @@ impl Csms {
             self.refuse(
                 &mut socket,
                 Some(identity),
-                503,
-                "Service Unavailable",
+                (503, "Service Unavailable"),
+                Refusal::AtCapacity,
                 remote,
             )
             .await;
             return Ok(());
         }
 
-        // Part 4 §3.1.2: the CSMS selects one of the *client's* offers, honouring the
-        // client's preference order.
-        let offer = Subprotocol::new(offered);
-        let selected = offer.select(self.versions.offered());
+        // Part 4 §3.1.2: the client lists its versions "in order of preference"; §3.2 (2.1:
+        // §3.3) leaves agreeing to one to the CSMS. Without a pin, the most preferred served
+        // version; with one, exactly the pinned version, or none.
+        let served = self.versions.offered();
+        let selected = match admission.version {
+            None => Subprotocol::new(offered.iter().copied()).select(served),
+            Some(pinned) => {
+                (offered.contains(&pinned) && served.contains(&pinned)).then_some(pinned)
+            }
+        };
         // Present: `upgrade_defect` refused the request above if it was not.
         let key = request.websocket_key().unwrap_or_default().to_owned();
 
         let Some(version) = selected else {
-            // Part 4 §3.1.1: complete the handshake *without* the subprotocol header, then
-            // close immediately. Answering with an error status here would be wrong.
+            // Part 4 §3.2 (2.1: §3.3): complete the handshake *without* the subprotocol
+            // header, then close immediately. Answering with an error status would be wrong.
+            // A pin refusal looks exactly the same on the wire: the station learns nothing
+            // about what it is provisioned for.
             write_accept(&mut socket, &key, None, None).await?;
             let mut ws = super::ws::attach(
                 socket,
@@ -768,10 +985,14 @@ impl Csms {
                 ))))
                 .await;
             let _ = ws.close().await;
+            let reason = match admission.version {
+                None => Refusal::NoCommonVersion { offered },
+                Some(required) => Refusal::VersionNotOffered { required, offered },
+            };
             let _ = self.events.send(SessionEvent::Refused {
                 identity: Some(identity),
-                status: 101,
                 remote,
+                reason,
             });
             return Ok(());
         };
@@ -801,25 +1022,48 @@ impl Csms {
         .await?;
         let ws = super::ws::attach(socket, codec, &request.head.rest);
 
-        self.run_session(ws, identity, version, remote, session)
+        self.run_session(ws, identity, version, remote, admission.context)
             .await;
         Ok(())
     }
 
+    /// Answers `status` with its reason phrase, closes, and reports `reason`. The wire answer
+    /// depends only on `status`, never on `reason`.
     async fn refuse(
         &self,
         socket: &mut MaybeTls,
         identity: Option<Identity>,
-        status: u16,
-        reason: &str,
+        (status, phrase): (u16, &str),
+        reason: Refusal,
         remote: SocketAddr,
     ) {
-        let _ = write_refusal(socket, status, reason).await;
+        let _ = write_refusal(socket, status, phrase).await;
         let _ = tokio::io::AsyncWriteExt::shutdown(socket).await;
         let _ = self.events.send(SessionEvent::Refused {
             identity,
-            status,
             remote,
+            reason,
+        });
+    }
+
+    /// With supersede off, the newer connection goes: closed with 1008, and reported.
+    async fn refuse_duplicate(
+        &self,
+        mut socket: WebSocket<MaybeTls>,
+        identity: Identity,
+        remote: SocketAddr,
+    ) {
+        let _ = socket
+            .send(Message::Close(Some(CloseFrame::new(
+                CloseCode::POLICY,
+                "already connected",
+            ))))
+            .await;
+        let _ = socket.close().await;
+        let _ = self.events.send(SessionEvent::Refused {
+            identity: Some(identity),
+            remote,
+            reason: Refusal::Duplicate,
         });
     }
 
@@ -849,6 +1093,7 @@ impl Csms {
             commands: commands_tx,
             events: events_tx,
             state: state_rx,
+            ended: watch::channel(None).0,
         });
         let handle = Handle::new(shared.clone());
 
@@ -882,8 +1127,11 @@ impl Csms {
                     Some(previous)
                 }
                 Some(previous) => {
-                    // Keep the older session; the newer connection is the one that goes.
+                    // Keep the older session; the newer connection is the one that goes —
+                    // with a close frame and an event, not a dropped socket.
                     sessions.insert(identity.clone(), previous);
+                    drop(sessions);
+                    self.refuse_duplicate(socket, identity, remote).await;
                     return;
                 }
                 None => None,
@@ -910,10 +1158,12 @@ impl Csms {
         let session_identity = identity.clone();
         let keepalive = self.keepalive;
         let task = tokio::spawn(async move {
+            let _guard = EndGuard(driver.shared.clone());
             let reason = driver
                 .run(socket, &mut commands_rx, version, keepalive)
                 .await;
             driver.abandon(&CallFailure::Disconnected);
+            driver.shared.end(Ended::Disconnected(reason.clone()));
             {
                 // Remove *this* session, not whichever one holds the identity now: a
                 // superseded session finishing must not evict the successor that replaced it,

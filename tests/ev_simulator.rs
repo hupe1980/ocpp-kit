@@ -500,3 +500,96 @@ fn without_a_sample_interval_only_state_changes_are_reported() {
     );
     assert_eq!(wallbox.advance(Duration::ZERO), []);
 }
+
+fn register_in(out: &Outgoing) -> Option<String> {
+    let v: Value = serde_json::from_str(&out.payload).unwrap();
+    let values = v["meterValue"].as_array()?.last()?["sampledValue"]
+        .as_array()?
+        .clone();
+    values
+        .iter()
+        .find(|s| s["measurand"] == "Energy.Active.Import.Register")
+        // 1.6 sends the value as a string, 2.x as a number.
+        .map(|s| {
+            s["value"]
+                .as_str()
+                .map_or_else(|| s["value"].to_string(), str::to_owned)
+        })
+}
+
+/// 1.6 §6.45/§6.49: `meterStart`/`meterStop` are whole Wh, so the register sampled at the same
+/// instant is too — by truncation, never ahead of the energy delivered.
+#[test]
+fn whole_wh_on_1_6_one_register_value_per_instant() {
+    let mut fractional_seen = false;
+    for seconds in [1u64, 7, 13, 61, 333] {
+        let mut wallbox =
+            Wallbox::new(Version::V1_6, start()).sample_every(Some(Duration::from_secs(seconds)));
+        wallbox
+            .plug_in(Ev::builder().reaction(Duration::ZERO).build())
+            .unwrap();
+        wallbox.answered(
+            "StartTransaction",
+            r#"{"transactionId":7,"idTagInfo":{"status":"Accepted"}}"#,
+        );
+        let sent = wallbox.advance(Duration::from_secs(seconds));
+        let exact = wallbox.ev().unwrap().reading().imported;
+        fractional_seen |= exact.trunc_to(0) != Some(exact);
+
+        let sample = sent
+            .iter()
+            .rfind(|o| o.action == "MeterValues")
+            .expect("a periodic sample at the instant");
+        let v: Value = serde_json::from_str(&sample.payload).unwrap();
+        assert_eq!(
+            v["meterValue"][0]["timestamp"].as_str().unwrap(),
+            wallbox.now().to_string()
+        );
+        let register = register_in(sample).unwrap();
+
+        let (stopped, _) = wallbox.unplug().unwrap();
+        let stop = stopped
+            .iter()
+            .find(|o| o.action == "StopTransaction")
+            .unwrap();
+        let stop: Value = serde_json::from_str(&stop.payload).unwrap();
+        assert_eq!(
+            stop["timestamp"].as_str().unwrap(),
+            wallbox.now().to_string()
+        );
+        let meter_stop = stop["meterStop"].as_i64().unwrap();
+
+        assert_eq!(
+            register,
+            meter_stop.to_string(),
+            "{seconds}s: one value per instant"
+        );
+        assert_eq!(
+            Some(Decimal::from(meter_stop)),
+            exact.trunc_to(0),
+            "truncated, not rounded"
+        );
+        for out in &sent {
+            received(Version::V1_6, out);
+        }
+    }
+    assert!(fractional_seen, "the sweep must hit a fractional register");
+}
+
+#[test]
+fn whole_wh_is_a_1_6_rule_and_2x_registers_stay_exact() {
+    let mut wallbox =
+        Wallbox::new(Version::V2_0_1, start()).sample_every(Some(Duration::from_secs(7)));
+    wallbox
+        .plug_in(Ev::builder().reaction(Duration::ZERO).build())
+        .unwrap();
+    let sent = wallbox.advance(Duration::from_secs(7));
+    let exact = wallbox.ev().unwrap().reading().imported;
+    assert_ne!(
+        exact.trunc_to(0),
+        Some(exact),
+        "7 s of charging is fractional Wh"
+    );
+    let reported = sent.iter().rev().find_map(register_in).unwrap();
+    assert_eq!(reported.parse::<Decimal>().unwrap(), exact);
+}

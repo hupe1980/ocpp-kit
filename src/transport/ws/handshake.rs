@@ -2,10 +2,10 @@
 //!
 //! Performed here rather than delegated, because OCPP puts requirements on it that a generic
 //! WebSocket library's callback cannot meet: authentication is a database lookup and so must
-//! be `async`; an unknown Charging Station identity is answered with **404** and bad
-//! credentials with **401** (Part 4 §3.1.1); and a client whose subprotocols the server cannot
-//! speak gets a *successful* handshake with no `Sec-WebSocket-Protocol` header followed by an
-//! immediate close.
+//! be `async`; an unknown Charging Station identity is answered with **404** (Part 4 §3.2; §3.3
+//! in 2.1) and bad credentials with **401** (HTTP Basic, Part 2 A00); and a client whose
+//! subprotocols the server does not agree to gets a *successful* handshake with no
+//! `Sec-WebSocket-Protocol` header followed by an immediate close (Part 4 §3.2).
 
 use std::fmt;
 
@@ -265,8 +265,8 @@ where
 
 /// Writes the `101 Switching Protocols` response.
 ///
-/// `subprotocol` is omitted when the server speaks none of the client's — which Part 4 §3.1.1
-/// requires, and which the caller follows with an immediate close.
+/// `subprotocol` is omitted when the server agrees to none of the client's — which Part 4 §3.2
+/// (2.1: §3.3) requires, and which the caller follows with an immediate close.
 pub(crate) async fn write_accept<S>(
     socket: &mut S,
     key: &str,

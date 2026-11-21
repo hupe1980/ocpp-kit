@@ -18,6 +18,11 @@ use core::fmt;
 
 use zeroize::Zeroizing;
 
+use crate::credentials::{self, PASSWORD_STRING_CHARSET};
+pub use crate::credentials::{
+    AUTHORIZATION_KEY_MAX_BYTES, AUTHORIZATION_KEY_MIN_BYTES, BASIC_AUTH_INTEROPERABLE_MAX_LEN,
+    BASIC_AUTH_MAX_LEN, BASIC_AUTH_MIN_LEN, CredentialError,
+};
 use crate::types::Identity;
 use crate::version::Version;
 
@@ -107,39 +112,24 @@ pub struct BasicAuthPassword {
     secret: Zeroizing<Vec<u8>>,
 }
 
-/// The shortest `BasicAuthPassword` OCPP 2.x allows (A00.FR.205).
-pub const BASIC_AUTH_MIN_LEN: usize = 16;
-
-/// The longest `BasicAuthPassword` OCPP 2.x can define.
-///
-/// A00.FR.205 does not name a single maximum: it says the ceiling is the `maxLimit` of the
-/// `BasicAuthPassword` variable, "which must be at least 40 characters and at most 64". 40 is
-/// therefore the shortest maximum a CSMS may impose — the *floor* of the ceiling — and 64 is
-/// the longest password the specification can ever describe. This constant is the latter,
-/// because refusing a 48-character password an operator legitimately configured would be a
-/// bug in this crate, not a conformance win.
-pub const BASIC_AUTH_MAX_LEN: usize = 64;
-
-/// The smallest `maxLimit` a CSMS may configure for `BasicAuthPassword` (A00.FR.205).
-///
-/// A Charging Station that must interoperate with any CSMS should stay at or below this.
-pub const BASIC_AUTH_INTEROPERABLE_MAX_LEN: usize = 40;
-
-/// The shortest 1.6 `AuthorizationKey`, in octets (Security Whitepaper A00.FR.205).
-pub const AUTHORIZATION_KEY_MIN_BYTES: usize = 16;
-
-/// The longest 1.6 `AuthorizationKey`, in octets (Security Whitepaper A00.FR.205).
-pub const AUTHORIZATION_KEY_MAX_BYTES: usize = 20;
-
 impl BasicAuthPassword {
-    /// A 2.x `BasicAuthPassword`: at least 16 characters, at most
-    /// [`BASIC_AUTH_MAX_LEN`], sent as UTF-8.
+    /// A 2.x `BasicAuthPassword`: a `passwordString` of 16 to [`BASIC_AUTH_MAX_LEN`]
+    /// characters, sent as UTF-8 (A00.FR.205).
+    ///
+    /// Refuses a character outside [`PASSWORD_STRING_CHARSET`](crate::credentials::PASSWORD_STRING_CHARSET)
+    /// and names it:
+    ///
+    /// ```
+    /// use ocpp_kit::transport::{BasicAuthPassword, CredentialError};
+    /// assert!(BasicAuthPassword::utf8("a-sixteen-plus-character-secret").is_ok());
+    /// assert_eq!(
+    ///     BasicAuthPassword::utf8("not a password string").unwrap_err(),
+    ///     CredentialError::Character(' ')
+    /// );
+    /// ```
     pub fn utf8(password: impl Into<String>) -> Result<Self, CredentialError> {
         let password = password.into();
-        let len = password.chars().count();
-        if !(BASIC_AUTH_MIN_LEN..=BASIC_AUTH_MAX_LEN).contains(&len) {
-            return Err(CredentialError::PasswordLength(len));
-        }
+        credentials::check_password(&password, BASIC_AUTH_MAX_LEN)?;
         Ok(Self {
             secret: Zeroizing::new(password.into_bytes()),
         })
@@ -151,21 +141,100 @@ impl BasicAuthPassword {
     /// Whitepaper (edition 4, A00.FR.205) requires "minimal 16-bytes long" and "20 bytes
     /// maximum" — 32 to 40 hexadecimal digits.
     pub fn hex(key: &str) -> Result<Self, CredentialError> {
-        let text = key.trim();
-        if !text.len().is_multiple_of(2) || text.is_empty() {
-            return Err(CredentialError::NotHex);
-        }
-        let mut bytes = Vec::with_capacity(text.len() / 2);
-        for pair in text.as_bytes().chunks(2) {
-            let digits = core::str::from_utf8(pair).map_err(|_| CredentialError::NotHex)?;
-            bytes.push(u8::from_str_radix(digits, 16).map_err(|_| CredentialError::NotHex)?);
-        }
-        if !(AUTHORIZATION_KEY_MIN_BYTES..=AUTHORIZATION_KEY_MAX_BYTES).contains(&bytes.len()) {
-            return Err(CredentialError::KeyLength(bytes.len()));
-        }
         Ok(Self {
-            secret: Zeroizing::new(bytes),
+            secret: Zeroizing::new(credentials::authorization_key_octets(key)?),
         })
+    }
+
+    /// Generates a fresh password for `version` from the operating system's entropy source.
+    ///
+    /// Both versions require a *randomly chosen* secret: 1.6 gets 20 random octets, the
+    /// longest `AuthorizationKey` ("strongly advised to be randomly generated binary",
+    /// Whitepaper A00.FR.205); 2.x gets 40 random `passwordString` characters, the longest
+    /// password every CSMS's `maxLimit` admits (A00.FR.205). Characters are drawn by rejection
+    /// sampling, so each of the 71 is equally likely.
+    ///
+    /// Send [`configuration_value`](Self::configuration_value) to the station
+    /// (`ChangeConfiguration(AuthorizationKey)` or `SetVariables(SecurityCtrlr.BasicAuthPassword)`),
+    /// keep the password to [`verify`](Self::verify) its next connection.
+    ///
+    /// ```
+    /// use ocpp_kit::{transport::BasicAuthPassword, version::Version};
+    /// let password = BasicAuthPassword::generate(Version::V2_0_1)?;
+    /// let value = password.configuration_value(Version::V2_0_1)?;
+    /// assert_eq!(value.len(), 40);
+    /// assert!(password.verify(value.as_bytes()));
+    /// # Ok::<(), ocpp_kit::transport::CredentialError>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`CredentialError::Entropy`] when the entropy source fails; there is no weaker fallback.
+    pub fn generate(version: Version) -> Result<Self, CredentialError> {
+        // 213 = 3 × 71: a byte below it maps onto the charset without bias; the rest are
+        // drawn again.
+        const ACCEPT_BELOW: u8 = 213;
+        if version == Version::V1_6 {
+            let mut octets = Zeroizing::new(vec![0u8; AUTHORIZATION_KEY_MAX_BYTES]);
+            getrandom::fill(&mut octets).map_err(|_| CredentialError::Entropy)?;
+            return Ok(Self { secret: octets });
+        }
+        let mut secret = Zeroizing::new(Vec::with_capacity(BASIC_AUTH_INTEROPERABLE_MAX_LEN));
+        let mut pool = Zeroizing::new([0u8; 64]);
+        while secret.len() < BASIC_AUTH_INTEROPERABLE_MAX_LEN {
+            getrandom::fill(&mut *pool).map_err(|_| CredentialError::Entropy)?;
+            for &byte in pool.iter().filter(|b| **b < ACCEPT_BELOW) {
+                if secret.len() == BASIC_AUTH_INTEROPERABLE_MAX_LEN {
+                    break;
+                }
+                secret.push(PASSWORD_STRING_CHARSET[usize::from(byte % 71)]);
+            }
+        }
+        Ok(Self { secret })
+    }
+
+    /// The text to configure on the station for `version` — the inverse of
+    /// [`for_version`](Self::for_version).
+    ///
+    /// 1.6: the `AuthorizationKey`, lowercase hexadecimal of the octets. That is also how a key
+    /// is derived from a passphrase: `BasicAuthPassword::raw(passphrase).configuration_value(V1_6)`.
+    /// 2.x: the `BasicAuthPassword` text itself.
+    ///
+    /// ```
+    /// use ocpp_kit::{transport::BasicAuthPassword, version::Version};
+    /// let key = BasicAuthPassword::raw("sixteen-byte-key").configuration_value(Version::V1_6)?;
+    /// assert_eq!(&*key, "7369787465656e2d627974652d6b6579");
+    /// # Ok::<(), ocpp_kit::transport::CredentialError>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// The rule of `version` the password breaks: 1.6 needs 16–20 octets
+    /// ([`CredentialError::KeyLength`]); 2.x needs a valid `passwordString` of 16–64
+    /// characters.
+    pub fn configuration_value(
+        &self,
+        version: Version,
+    ) -> Result<ConfigurationValue, CredentialError> {
+        const DIGITS: &[u8; 16] = b"0123456789abcdef";
+        if version == Version::V1_6 {
+            let len = self.secret.len();
+            if !(AUTHORIZATION_KEY_MIN_BYTES..=AUTHORIZATION_KEY_MAX_BYTES).contains(&len) {
+                return Err(CredentialError::KeyLength(len));
+            }
+            let mut text = Zeroizing::new(String::with_capacity(len * 2));
+            for byte in self.secret.iter() {
+                text.push(char::from(DIGITS[usize::from(byte >> 4)]));
+                text.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+            }
+            return Ok(ConfigurationValue(text));
+        }
+        // Not UTF-8 means not a passwordString; name the first byte that is not.
+        let text = core::str::from_utf8(&self.secret).map_err(|error| {
+            CredentialError::Character(char::from(self.secret[error.valid_up_to()]))
+        })?;
+        credentials::check_password(text, BASIC_AUTH_MAX_LEN)?;
+        Ok(ConfigurationValue(Zeroizing::new(text.to_owned())))
     }
 
     /// Uses the bytes verbatim, skipping every version rule.
@@ -199,6 +268,36 @@ impl BasicAuthPassword {
     }
 }
 
+/// The text a station is configured with — a 1.6 `AuthorizationKey` or a 2.x
+/// `BasicAuthPassword` — as [`BasicAuthPassword::configuration_value`] renders it.
+///
+/// A secret: zeroized on drop, and `Debug` prints `<redacted>`. Read it as a `&str` where it is
+/// sent (`&*value`, [`as_str`](Self::as_str)).
+pub struct ConfigurationValue(Zeroizing<String>);
+
+impl ConfigurationValue {
+    /// The text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl core::ops::Deref for ConfigurationValue {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for ConfigurationValue {
+    /// Never prints the secret.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ConfigurationValue(<redacted>)")
+    }
+}
+
 impl fmt::Debug for BasicAuthPassword {
     /// Never prints the secret.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -219,41 +318,6 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     }
     diff == 0
 }
-
-/// Why a credential was rejected.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum CredentialError {
-    /// The password is shorter than [`BASIC_AUTH_MIN_LEN`] or longer than
-    /// [`BASIC_AUTH_MAX_LEN`] characters (A00.FR.205).
-    PasswordLength(usize),
-    /// The 1.6 `AuthorizationKey` is not a hexadecimal string.
-    NotHex,
-    /// The 1.6 `AuthorizationKey` decodes to fewer than [`AUTHORIZATION_KEY_MIN_BYTES`] or
-    /// more than [`AUTHORIZATION_KEY_MAX_BYTES`] octets (1.6 Security Whitepaper A00.FR.205).
-    KeyLength(usize),
-}
-
-impl fmt::Display for CredentialError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CredentialError::PasswordLength(len) => write!(
-                f,
-                "BasicAuthPassword is {len} characters; OCPP 2.x allows {BASIC_AUTH_MIN_LEN}–{BASIC_AUTH_MAX_LEN} (A00.FR.205)"
-            ),
-            CredentialError::NotHex => {
-                f.write_str("the 1.6 AuthorizationKey must be an even-length hexadecimal string")
-            }
-            CredentialError::KeyLength(len) => write!(
-                f,
-                "the 1.6 AuthorizationKey is {len} bytes; it must be \
-                 {AUTHORIZATION_KEY_MIN_BYTES}–{AUTHORIZATION_KEY_MAX_BYTES} (A00.FR.205)"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for CredentialError {}
 
 /// Encodes HTTP Basic credentials for `identity`.
 ///
@@ -364,6 +428,113 @@ mod tests {
         assert!(BasicAuthPassword::utf8("x".repeat(41)).is_ok());
         assert!(BasicAuthPassword::utf8("x".repeat(64)).is_ok());
         assert!(BasicAuthPassword::utf8("x".repeat(65)).is_err());
+    }
+
+    #[test]
+    fn a_generated_password_round_trips_through_its_configuration_value() {
+        for version in [Version::V1_6, Version::V2_0_1, Version::V2_1] {
+            for _ in 0..1_000 {
+                let password = BasicAuthPassword::generate(version).unwrap();
+                let value = password.configuration_value(version).unwrap();
+                let back = BasicAuthPassword::for_version(version, &value).unwrap();
+                assert!(
+                    back.verify(password.as_bytes()),
+                    "{version}: {}",
+                    value.as_str()
+                );
+            }
+        }
+        let legacy = BasicAuthPassword::generate(Version::V1_6).unwrap();
+        assert_eq!(legacy.as_bytes().len(), AUTHORIZATION_KEY_MAX_BYTES);
+        let key = legacy.configuration_value(Version::V1_6).unwrap();
+        assert_eq!(key.len(), 40);
+        assert!(
+            key.bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        );
+        let modern = BasicAuthPassword::generate(Version::V2_1).unwrap();
+        assert_eq!(modern.as_bytes().len(), BASIC_AUTH_INTEROPERABLE_MAX_LEN);
+    }
+
+    #[test]
+    fn generated_characters_are_uniform_over_the_charset() {
+        // 10 000 passwords × 40 characters; each of 71 characters expected 5 633.8 times.
+        let mut counts = [0u32; 256];
+        for _ in 0..10_000 {
+            for &byte in BasicAuthPassword::generate(Version::V2_0_1)
+                .unwrap()
+                .as_bytes()
+            {
+                counts[usize::from(byte)] += 1;
+            }
+        }
+        let expected = 400_000.0 / 71.0;
+        let mut chi_square = 0.0;
+        for &c in PASSWORD_STRING_CHARSET {
+            let observed = f64::from(counts[usize::from(c)]);
+            assert!(observed > 0.0, "{} never generated", char::from(c));
+            chi_square += (observed - expected).powi(2) / expected;
+        }
+        let outside: u32 = (0u8..=255)
+            .filter(|b| !PASSWORD_STRING_CHARSET.contains(b))
+            .map(|b| counts[usize::from(b)])
+            .sum();
+        assert_eq!(outside, 0);
+        // 70 degrees of freedom; p = 0.001 is at ~112. A modulo bias over 256 would sit near 4 000.
+        assert!(chi_square < 120.0, "chi-square {chi_square}");
+    }
+
+    #[test]
+    fn a_configuration_value_follows_the_version_rules() {
+        let passphrase = BasicAuthPassword::raw("sixteen-byte-key");
+        assert_eq!(
+            &*passphrase.configuration_value(Version::V1_6).unwrap(),
+            "7369787465656e2d627974652d6b6579"
+        );
+        assert_eq!(
+            BasicAuthPassword::raw("fifteen-byte-ky")
+                .configuration_value(Version::V1_6)
+                .unwrap_err(),
+            CredentialError::KeyLength(15)
+        );
+        assert_eq!(
+            BasicAuthPassword::raw([0u8; 21].to_vec())
+                .configuration_value(Version::V1_6)
+                .unwrap_err(),
+            CredentialError::KeyLength(21)
+        );
+        // 2.x: the text, and only if it is a valid passwordString.
+        let modern = BasicAuthPassword::utf8("0123456789abcdef").unwrap();
+        assert_eq!(
+            &*modern.configuration_value(Version::V2_0_1).unwrap(),
+            "0123456789abcdef"
+        );
+        assert_eq!(
+            BasicAuthPassword::raw([0xff; 16].to_vec())
+                .configuration_value(Version::V2_0_1)
+                .unwrap_err(),
+            CredentialError::Character('\u{ff}')
+        );
+        // A secret is never printed — neither the password nor what is configured from it.
+        assert_eq!(format!("{modern:?}"), "BasicAuthPassword(<redacted>)");
+        let value = BasicAuthPassword::generate(Version::V2_0_1)
+            .unwrap()
+            .configuration_value(Version::V2_0_1)
+            .unwrap();
+        assert_eq!(format!("{value:?}"), "ConfigurationValue(<redacted>)");
+        assert!(!format!("{value:?}").contains(value.as_str()));
+    }
+
+    #[test]
+    fn a_2x_password_outside_the_charset_is_refused_by_name() {
+        assert_eq!(
+            BasicAuthPassword::utf8("0123456789abcde!").unwrap_err(),
+            CredentialError::Character('!')
+        );
+        assert_eq!(
+            BasicAuthPassword::for_version(Version::V2_1, "0123456789 abcdef").unwrap_err(),
+            CredentialError::Character(' ')
+        );
     }
 
     #[test]

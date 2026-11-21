@@ -258,9 +258,15 @@ assert_eq!(wallbox.ev().unwrap().state(), EvState::Charging);
 ```
 
 The wallbox does no I/O: deliver its `Outgoing` messages however your test reaches the CSMS, or
-over a real socket with `MockStation::connect_with(url, id, answer)`. On 1.6, hand it the CSMS's
+over a real socket with `MockStation::builder(id).answer(..).connect(url)`; `.versions([Version::V1_6])`
+plays a 1.6-only station. On 1.6, hand it the CSMS's
 `StartTransaction` answer with `answered`; it never invents a transaction id. On 2.1 a `Dynamic`
 setpoint profile lapses when your arbiter stops updating it (K28.FR.13).
+
+On 1.6 `meterStart` and `meterStop` are integers in Wh (§6.45, §6.49), so every energy register
+the wallbox reports is whole Wh, truncated the way a register counts: a sample and a stop at the
+same instant carry the same value, and neither runs ahead of the energy delivered. 2.x registers
+stay exact decimals.
 
 ### What is deliberately not in it
 

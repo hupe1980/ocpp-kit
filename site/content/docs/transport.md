@@ -40,8 +40,8 @@ let handle = station.spawn()?;
 
 * **Negotiation follows Part 4 §3.1.2 exactly.** The client lists its subprotocols in
   preference order and the server must echo back exactly one. A handshake that completes
-  *without* the header is how a CSMS says "I speak none of these" (§3.1.1); it is reported as
-  `NegotiationError::NoSubprotocol` rather than silently assumed to be 1.6.
+  *without* the header is how a CSMS says "I agree to none of these" (§3.2; §3.3 in 2.1); it is
+  reported as `NegotiationError::NoSubprotocol` rather than silently assumed to be 1.6.
 * **Reconnect keeps the engine.** Queue, boot state and heartbeat survive a reconnect, so a
   station does not repeat `BootNotification` on one (Part 4 §5.4). The back-off is the
   specification's own: `wait_minimum + random(random_range)`, doubled up to `repeat_times`
@@ -54,8 +54,10 @@ let handle = station.spawn()?;
   in which it can be lost.
 * **Basic auth is version-correct.** 1.6's `AuthorizationKey` is a hexadecimal string whose
   *decoded octets* are the password; 2.x's `BasicAuthPassword` is sent as UTF-8 and must be
-  at least 16 characters (A00.FR.205). `BasicAuthPassword::for_version` picks the right one, and an
-  identity containing `:` is rejected at build time (A00.FR.204).
+  a `passwordString` of at least 16 characters (A00.FR.205). `BasicAuthPassword::for_version`
+  picks the right one; an identity containing `:` (A00.FR.204), and a URL carrying
+  `user:password@`, are rejected at build time — the password has its own field, and would
+  otherwise be echoed into every event and error that names the URL.
 * **An unanswered ping ends the session.** Part 4 §5.3 makes the WebSocket ping the
   end-to-end liveness check, and it is only a check if something acts on the silence: a mobile
   network that drops a connection leaves a socket that stays writable for minutes. `Keepalive`
@@ -63,6 +65,51 @@ let handle = station.spawn()?;
   turns a dead link into a reconnect instead of a hang.
 * **Compression is offered** when the `compression` feature is on — optional for a station,
   recommended by Part 4 §3.4. See [the WebSocket layer](@/docs/websocket.md).
+
+### Why a station could not connect
+
+The handle keeps why the station stopped, so asking late still gets the answer; every failed
+attempt is also an event, before the back-off:
+
+```rust,no_run
+use ocpp_kit::transport::{Ended, Event, Station, TransportError};
+
+# async fn run(station: Station) -> Result<(), Box<dyn std::error::Error>> {
+let handle = station.spawn()?;
+
+let mut events = handle.events();
+tokio::spawn(async move {
+    while let Ok(event) = events.recv().await {
+        if let Event::ConnectFailed { attempt, configuration_slot, error } = event {
+            // "the CSMS rejected the handshake with HTTP 401", "server did not select a
+            // WebSocket subprotocol (Part 4 §3.1.2)", a TLS or I/O error …
+            eprintln!("attempt {attempt} on slot {configuration_slot}: {error}");
+        }
+    }
+});
+
+match handle.closed().await {
+    Ended::ConnectFailed(error) if matches!(*error, TransportError::Rejected { status: 401 }) => {
+        // the CSMS does not accept this password
+    }
+    ended if ended.is_requested() => {}           // you drained it
+    ended => eprintln!("station stopped: {ended}"),
+}
+# Ok(()) }
+```
+
+| `Ended` | When |
+|---|---|
+| `ConnectFailed(error)` | reconnect is off and the attempt failed; `error` is the typed `TransportError` |
+| `Disconnected(reason)` | a session was open and ended (reconnect off, or a drain) — the `DisconnectReason` below |
+| `Stopped` | the task was aborted or panicked |
+
+`Handle::wait_ready` — connected and `BootNotification` accepted — fails with the same `Ended`,
+and `Station::run` returns it; `run`'s `Err` is reserved for a station that could not start. To
+make a call fail fast with the cause instead of waiting in the offline queue, race it:
+`tokio::select! { r = handle.call(req) => r?, ended = handle.closed() => return Err(ended.into()) }`.
+The CSMS's per-station `Handle` has `closed()` too, resolving to the reason the fleet's
+`SessionEvent::Closed` carries.
 
 ### Network configuration slots
 
@@ -141,26 +188,27 @@ let csms = Csms::builder()
 
 The HTTP upgrade is performed by this crate rather than handed to a WebSocket callback,
 because OCPP puts requirements on it a synchronous callback cannot meet: authentication is a
-database lookup, so it has to be `async`; an unknown identity should be answered **404** and
-bad credentials **401**, so an operator can tell a typo from a wrong password (Part 4 §3.1.1);
-and a client whose subprotocols the CSMS cannot speak must get a *successful* handshake with
-no `Sec-WebSocket-Protocol` header, followed by an immediate close.
+database lookup, so it has to be `async`; an unknown identity should be answered **404** (Part 4
+§3.2; §3.3 in 2.1) and bad credentials **401** (HTTP Basic), so an operator can tell a typo from a
+wrong password; and a client whose subprotocols the CSMS does not agree to must get a
+*successful* handshake with no `Sec-WebSocket-Protocol` header, followed by an immediate close.
 
 ### What the authenticator resolved rides the session
 
 An authenticator has already looked the station up to decide whether to admit it. Hanging that
 lookup on the session spares every handler a second map keyed on `Identity` — and spares it
 the question of what to do when that map misses for a station the authenticator definitely
-admitted:
+admitted. The same lookup knows which version the station is provisioned for, so it can pin it:
 
 ```rust,no_run
-use ocpp_kit::transport::{Auth, AuthOutcome, Ctx, SessionContext};
+use ocpp_kit::transport::{Admission, Auth, AuthOutcome, Ctx};
+use ocpp_kit::Version;
 
-struct ChargePoint { row_id: u64, tenant: String }
+struct ChargePoint { row_id: u64, tenant: String, version: Version }
 
 async fn authenticate(auth: Auth) -> AuthOutcome {
     match lookup(auth.identity.as_str()).await {
-        Some(point) => AuthOutcome::Accept(SessionContext::new(point)),
+        Some(point) => Admission::new().version(point.version).context(point).into(),
         None => AuthOutcome::Unknown,
     }
 }
@@ -175,7 +223,13 @@ fn handle(ctx: &Ctx) {
 
 `Handle::session` reads the same value, so code calling *out* to a station sees the same
 resolution as code answering a call from one. `AuthOutcome::accept()` is the short spelling
-for admitting a station without storing anything.
+for admitting a station without storing or pinning anything.
+
+**Pinning a version.** The client lists its versions "in order of preference" (Part 4 §3.1.2);
+agreeing to one is the CSMS's call (§3.2). With `Admission::version(v)` the CSMS serves exactly
+`v` — a station provisioned for 2.0.1 that offers `[2.1, 2.0.1]` runs 2.0.1 — and refuses a station
+that did not offer it like a version mismatch (`Refusal::VersionNotOffered`). Serve every version
+you implement and pin each station: a station on a newly registered version needs no restart.
 
 The router keeps one session per identity. A station that reconnects after a network partition
 supersedes its own zombie session: the old one is given `supersede_drain` to finish its
@@ -231,6 +285,29 @@ counts (G02.FR.04); pings do not (Part 4 §5.3). A conforming station sends a `H
 
 `Display` is one log line with the peer's text escaped. A station reconnects after every reason
 except `Closed`.
+
+### Why a connection was refused
+
+Every connection the CSMS turns away is one `SessionEvent::Refused { identity, remote, reason }`.
+The reason is for the operator; the peer sees only the HTTP status — both 401s get the identical
+response, and a pin refusal the same handshake as a version mismatch.
+
+| `Refusal` | `status()` | Cause |
+|---|---|---|
+| `BadUpgrade { status }` | 400 / 426 | not a WebSocket upgrade, or not version 13 (RFC 6455 §4.2.1, §4.4) |
+| `NoIdentity` | 400 | no usable identity in the path |
+| `UsernameMismatch` | 401 | Basic username ≠ the identity in the URL (A00.FR.204/207) |
+| `Rejected` | 401 | the authenticator rejected the credentials |
+| `Unknown` | 404 | the authenticator does not know the identity |
+| `AtCapacity` | 503 | `max_connections` sessions are open |
+| `NoCommonVersion { offered }` | 101 | none of the offered versions is served |
+| `VersionNotOffered { required, offered }` | 101 | the pinned version was not offered, or is not served |
+| `Duplicate` | 101 | a session for the identity is open and `supersede_existing(false)`; closed with 1008 |
+| `TimedOut` | — | the handshake outlived `handshake_timeout` |
+| `Failed(error)` | — | TLS, I/O, or a malformed request |
+
+A peer that connects and closes without sending a request — a load balancer's TCP probe — is not
+reported: nothing was asked, so nothing was refused.
 
 ## Local Controller
 
@@ -336,6 +413,7 @@ while let Ok(event) = events.recv().await {
         SessionEvent::Violation { identity, violation } => println!("{identity}: {violation:?}"),
         SessionEvent::RateLimited { identity } => println!("{identity} is over its rate"),
         SessionEvent::Closed { identity, reason } => println!("{identity} left: {reason}"),
+        SessionEvent::Refused { remote, reason, .. } => println!("{remote} refused: {reason}"),
         _ => {}
     }
 }

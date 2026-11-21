@@ -1,12 +1,16 @@
 +++
-title = "The ocpp-cli tool"
+title = "The ocpp tool"
 description = "Validate a payload, explain an OCPP-J frame, replay a capture in CI, browse the action catalogue, and run a mock CSMS or charging station."
 weight = 130
 +++
 
 ```console
-$ cargo install ocpp-kit --features cli
+$ brew install hupe1980/tap/ocpp-kit          # macOS (Apple silicon), Linux x86_64 / arm64
+$ cargo install ocpp-kit --features cli       # anywhere else
 ```
+
+Prebuilt binaries for the same platforms, with `checksums.txt`, are on each
+[GitHub release](https://github.com/hupe1980/ocpp-kit/releases).
 
 A small tool for the things you end up doing by hand: reading a capture, checking a payload,
 and standing up a peer to talk to.
@@ -14,7 +18,7 @@ and standing up a peer to talk to.
 ## `actions` — the catalogue
 
 ```console
-$ ocpp-cli actions --version 2.1 --block S
+$ ocpp actions --version 2.1 --block S
 ACTION                               BLOCK                    KIND    DIRECTION
 BatterySwap                          S                        CALL    CS  -> CSMS
 RequestBatterySwap                   S                        CALL    CSMS -> CS
@@ -29,7 +33,7 @@ RequestBatterySwap                   S                        CALL    CSMS -> CS
 
 ```console
 $ echo '{"reason":"PowerUp","chargingStation":{"model":"M1","vendorName":"ACME"}}' \
-    | ocpp-cli validate --action BootNotification
+    | ocpp validate --action BootNotification
 {
   "chargingStation": {
     "model": "M1",
@@ -45,7 +49,7 @@ the types do not carry. When it fails, it names the code you should have answere
 
 ```console
 $ echo '{"reason":"PowerUp","chargingStation":{"model":"a-model-name-that-is-far-too-long","vendorName":"ACME"}}' \
-    | ocpp-cli validate --action BootNotification
+    | ocpp validate --action BootNotification
 error: /chargingStation/model: maxLength 20 exceeded (got 33 characters)
   OCPP error code: PropertyConstraintViolation
   path: /chargingStation/model
@@ -58,7 +62,7 @@ Add `--response` for a response payload, `--version 1.6` for another version, an
 
 ```console
 $ echo '[2,"1","BootNotification",{"reason":"PowerUp","chargingStation":{"model":"M1","vendorName":"ACME"}}]' \
-    | ocpp-cli frame
+    | ocpp frame
 CALL 1 BootNotification [ChargingStation] valid
 ```
 
@@ -70,7 +74,7 @@ A capture is one frame per line; a leading `>` or `<` marking direction is ignor
 starts a comment.
 
 ```console
-$ ocpp-cli replay session.ocppcap --version 2.1
+$ ocpp replay session.ocppcap --version 2.1
     1: CALL 19223201 BootNotification [ChargingStation] valid
     2: CALLRESULT 19223201 (78 bytes) — the action is only known from the matching CALL
     3: CALL 19223202 StatusNotification [ChargingStation] INVALID: /timestamp: …
@@ -89,13 +93,13 @@ station keeps sending and its sessions stop being billable — so this is the lo
 out what a particular station does before writing an integration around a guess.
 
 ```console
-$ ocpp-cli signed --key MzA1OTMwMTMwNjA3MkE4NjQ4Q0UzRDAyMDEwNjA4MkE4NjQ4Q0UzRDAzMDEwNw==
+$ ocpp signed --key MzA1OTMwMTMwNjA3MkE4NjQ4Q0UzRDAyMDEwNjA4MkE4NjQ4Q0UzRDAzMDEwNw==
 publicKey:      23 bytes, sent as PrintedHex
   printed:      3059301306072A8648CE3D020106082A8648CE3D030107
   hex:          3059301306072A8648CE3D020106082A8648CE3D030107
 note: the key is what the station *claims*. Verify against one obtained out of band.
 
-$ echo '{"signedMeterData":"T0NNRnx7fQ==","encodingMethod":"OCMF"}' | ocpp-cli signed
+$ echo '{"signedMeterData":"T0NNRnx7fQ==","encodingMethod":"OCMF"}' | ocpp signed
 encodingMethod: OCMF
 signingMethod:  <absent>
 record:         7 bytes, OCMF text
@@ -111,12 +115,12 @@ JSON quoting still on, which is how it comes out of a capture. See
 ## `csms` and `station` — mock peers
 
 ```console
-$ ocpp-cli csms --bind 127.0.0.1:9000
+$ ocpp csms --bind 127.0.0.1:9000
 mock CSMS listening on 127.0.0.1:9000
 station CS-0001 connecting from 127.0.0.1:54119 (security profile 1)
 + CS-0001 (OCPP 2.1)
 
-$ ocpp-cli station --url ws://127.0.0.1:9000/ocpp --identity CS-0001
+$ ocpp station --url ws://127.0.0.1:9000/ocpp --identity CS-0001
 boot: Accepted, interval 300s
 ```
 

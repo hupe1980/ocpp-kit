@@ -148,8 +148,46 @@ mod peers {
         assert!(station.saw("Reset"));
     }
 
+    /// A test can play a 1.6-only station: it lands on 1.6, and against a CSMS that does not
+    /// serve 1.6 it says why it could not connect.
+    #[tokio::test]
+    async fn a_mock_station_offers_only_the_versions_it_is_given() {
+        use ocpp_kit::transport::{Ended, TransportError};
+        use ocpp_kit::version::NegotiationError;
+
+        let csms = MockCsms::start().await.expect("the mock CSMS starts");
+        let station = MockStation::builder("CS-16")
+            .versions([Version::V1_6])
+            .connect(csms.url())
+            .expect("the station connects");
+        station
+            .boot(Version::V1_6)
+            .await
+            .expect("a 1.6 boot is answered");
+        assert_eq!(station.handle().state().version, Version::V1_6);
+
+        let modern = MockCsms::builder()
+            .versions([Version::V2_1])
+            .start()
+            .await
+            .expect("the mock CSMS starts");
+        let old = MockStation::builder("CS-16")
+            .versions([Version::V1_6])
+            .connect(modern.url())
+            .expect("the station is spawned");
+        // The mock does not reconnect: it ends, with the reason.
+        let ended = tokio::time::timeout(Duration::from_secs(5), old.handle().closed())
+            .await
+            .expect("the station ends");
+        assert!(
+            matches!(&ended, Ended::ConnectFailed(error)
+                if matches!(**error, TransportError::Negotiation(NegotiationError::NoSubprotocol))),
+            "{ended}"
+        );
+    }
+
     /// A CSMS controls a simulated vehicle over a real socket: its `SetChargingProfile` reaches a
-    /// wallbox through `MockStation::connect_with`, and the wallbox's meter values reach the CSMS.
+    /// wallbox through `MockStation::builder(..).answer(..)`, and the wallbox's meter values reach the CSMS.
     #[tokio::test]
     async fn a_csms_controls_a_simulated_vehicle_over_the_wire() {
         use std::sync::{Arc, Mutex};
@@ -163,18 +201,20 @@ mod peers {
         let csms = MockCsms::start().await.expect("the mock CSMS starts");
         let start = "2026-11-20T18:00:00Z".parse().unwrap();
         let wallbox = Arc::new(Mutex::new(Wallbox::new(Version::V2_1, start)));
-        let station = MockStation::connect_with(csms.url(), "CS-0004", {
-            let wallbox = wallbox.clone();
-            move |_, request| {
-                let mut wallbox = wallbox
-                    .lock()
-                    .map_err(|_| CallError::internal("poisoned"))?;
-                wallbox
-                    .answer(request)
-                    .unwrap_or_else(|| Err(CallError::not_implemented(&request.action)))
-            }
-        })
-        .expect("the station connects");
+        let station = MockStation::builder("CS-0004")
+            .answer({
+                let wallbox = wallbox.clone();
+                move |_, request| {
+                    let mut wallbox = wallbox
+                        .lock()
+                        .map_err(|_| CallError::internal("poisoned"))?;
+                    wallbox
+                        .answer(request)
+                        .unwrap_or_else(|| Err(CallError::not_implemented(&request.action)))
+                }
+            })
+            .connect(csms.url())
+            .expect("the station connects");
         station.boot(Version::V2_1).await.expect("boot succeeds");
 
         let plugged = wallbox

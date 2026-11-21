@@ -9,11 +9,12 @@ use ocpp_kit::RawValue;
 use ocpp_kit::engine::IncomingRequest;
 use ocpp_kit::rpc::CallError;
 use ocpp_kit::transport::{
-    Auth, AuthOutcome, BoxFuture, Csms, CsmsHandle, Ctx, Direction, Handle, Handler,
-    LocalController, NetworkProfile, NetworkProfiles, RelayDecision, SecurityProfile,
-    SessionContext, SessionEvent, Station,
+    Admission, Auth, AuthOutcome, BoxFuture, Csms, CsmsHandle, Ctx, Direction, Ended, Handle,
+    Handler, LocalController, NetworkProfile, NetworkProfiles, Refusal, RelayDecision,
+    SecurityProfile, SessionEvent, Station, TransportError,
 };
 use ocpp_kit::types::Identity;
+use ocpp_kit::version::NegotiationError;
 use ocpp_kit::{Version, v2_1};
 use tokio::net::TcpListener;
 
@@ -174,7 +175,7 @@ async fn a_station_boots_and_the_csms_can_call_it_back() {
 
     // And the CSMS can address the station by identity.
     let identity = Identity::new("CS-0001").unwrap();
-    assert!(station.wait_ready().await);
+    station.wait_ready().await.unwrap();
     let reset = tokio::time::timeout(
         Duration::from_secs(5),
         csms.call(
@@ -198,7 +199,7 @@ async fn the_csms_notifies_the_station_that_a_web_payment_started() {
     let (port, csms) = start_csms(csms_handler, accept_all).await;
     let station = station(port, "CS-QR01");
     boot(&station).await;
-    assert!(station.wait_ready().await);
+    station.wait_ready().await.unwrap();
 
     let identity = Identity::new("CS-QR01").unwrap();
     tokio::time::timeout(
@@ -231,7 +232,7 @@ async fn bad_credentials_get_a_401_and_an_unknown_identity_a_404() {
 
     // The station's reconnect loop keeps retrying, so build it without reconnect.
     for (identity, expected) in [("CS-WRONGPW", 401u16), ("CS-MISSING", 404)] {
-        let error = Station::builder()
+        let ended = Station::builder()
             .identity(identity)
             .unwrap()
             .url(format!("ws://127.0.0.1:{port}/ocpp"))
@@ -243,15 +244,34 @@ async fn bad_credentials_get_a_401_and_an_unknown_identity_a_404() {
             .unwrap()
             .run()
             .await
-            .unwrap_err();
-        assert!(error.to_string().contains("websocket") || error.to_string().contains("HTTP"));
+            .unwrap();
+        // The station says exactly what the CSMS answered.
+        match &ended {
+            Ended::ConnectFailed(error) => assert!(
+                matches!(**error, TransportError::Rejected { status } if status == expected),
+                "{ended}"
+            ),
+            other => panic!("expected a connect failure, got {other}"),
+        }
+        assert!(
+            ended.to_string().contains(&format!("HTTP {expected}")),
+            "{ended}"
+        );
 
         let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
             .await
             .expect("an event arrived")
             .unwrap();
         match event {
-            SessionEvent::Refused { status, .. } => assert_eq!(status, expected),
+            SessionEvent::Refused { reason, .. } => {
+                assert_eq!(reason.status(), Some(expected));
+                let typed = if expected == 401 {
+                    matches!(reason, Refusal::Rejected)
+                } else {
+                    matches!(reason, Refusal::Unknown)
+                };
+                assert!(typed, "{reason}");
+            }
             other => panic!("unexpected event {other:?}"),
         }
     }
@@ -275,7 +295,7 @@ async fn a_station_and_a_csms_with_no_common_version_close_cleanly() {
         let _ = csms.serve_on(listener).await;
     });
 
-    // The station speaks only 1.6. Part 4 §3.1.1: the handshake succeeds *without* a
+    // The station speaks only 1.6. Part 4 §3.2: the handshake succeeds *without* a
     // subprotocol header, and the connection is closed immediately — so negotiation fails
     // rather than the two silently talking past each other.
     let outcome = Station::builder()
@@ -293,11 +313,12 @@ async fn a_station_and_a_csms_with_no_common_version_close_cleanly() {
         .unwrap()
         .run()
         .await;
-    let error = outcome.unwrap_err();
+    let error = outcome.unwrap();
     assert!(
-        error.to_string().contains("did not select"),
+        matches!(&error, Ended::ConnectFailed(e) if matches!(**e, TransportError::Negotiation(NegotiationError::NoSubprotocol))),
         "expected a negotiation failure, got {error}"
     );
+    assert!(error.to_string().contains("did not select"), "{error}");
 }
 
 #[tokio::test]
@@ -873,10 +894,12 @@ async fn what_the_authenticator_resolved_reaches_the_handler_and_the_handle() {
         .authenticate(|auth: Auth| async move {
             // The lookup happens once, here, where the station has to be looked up anyway.
             if auth.identity.as_str() == "CS-0001" {
-                AuthOutcome::Accept(SessionContext::new(ChargePoint {
-                    row_id: 42,
-                    tenant: "acme".into(),
-                }))
+                Admission::new()
+                    .context(ChargePoint {
+                        row_id: 42,
+                        tenant: "acme".into(),
+                    })
+                    .into()
             } else {
                 AuthOutcome::Unknown
             }
@@ -1576,8 +1599,12 @@ mod mixed_profiles {
             loop {
                 match events.recv().await {
                     Ok(SessionEvent::Opened { identity, .. }) => return Some(identity.to_string()),
-                    Ok(SessionEvent::Refused { status, .. }) => {
-                        return Some(format!("refused {status}"));
+                    Ok(SessionEvent::Refused { reason, .. }) => {
+                        return Some(match (reason.status(), &reason) {
+                            (Some(status), _) => format!("refused {status}"),
+                            (None, Refusal::Failed(_)) => "refused: handshake failed".into(),
+                            (None, _) => format!("refused: {reason}"),
+                        });
                     }
                     Ok(_) => {}
                     Err(_) => return None,
@@ -1624,6 +1651,38 @@ mod mixed_profiles {
         );
     }
 
+    /// SC-001: a CSMS certificate for another name ends the station with the TLS error, not
+    /// "connection lost".
+    #[tokio::test]
+    async fn a_csms_certificate_for_another_name_is_the_reason_given() {
+        let (port, _csms, _seen) = start().await;
+        let handle = Station::builder()
+            .identity("CS-BASIC")
+            .unwrap()
+            // The fixture certificate is for 127.0.0.1 only.
+            .url(format!("wss://localhost:{port}/ocpp"))
+            .versions([Version::V2_1])
+            .security_profile(SecurityProfile::TlsBasicAuth)
+            .password(ocpp_kit::transport::BasicAuthPassword::utf8("0123456789abcdef").unwrap())
+            .tls(trusting_client(None))
+            .ping_interval(None)
+            .reconnect(false)
+            .handler(StationSide)
+            .build()
+            .unwrap()
+            .spawn()
+            .unwrap();
+        let ended = tokio::time::timeout(Duration::from_secs(5), handle.closed())
+            .await
+            .unwrap();
+        assert!(matches!(ended, Ended::ConnectFailed(_)), "{ended}");
+        let text = ended.to_string().to_lowercase();
+        assert!(
+            text.contains("certificate") || text.contains("name"),
+            "{text}"
+        );
+    }
+
     /// A00.FR.407: optional means "may be absent", never "need not verify".
     #[tokio::test]
     async fn a_certificate_from_an_untrusted_issuer_fails_the_handshake() {
@@ -1637,9 +1696,11 @@ mod mixed_profiles {
             trusting_client(Some(("rogue-station.pem", "rogue-station.key"))),
         );
         assert_eq!(
-            opened_within(&mut events, Duration::from_secs(1)).await,
-            None,
-            "no session, no refusal: TLS ended it"
+            opened_within(&mut events, Duration::from_secs(5))
+                .await
+                .as_deref(),
+            Some("refused: handshake failed"),
+            "no session: TLS ended it, and the operator is told"
         );
         assert!(
             seen.try_recv().is_err(),
@@ -1665,5 +1726,536 @@ mod mixed_profiles {
             seen.recv().await,
             Some((SecurityProfile::TlsBasicAuth, "basic"))
         );
+    }
+}
+
+// --- Edge diagnostics: why a connection failed, which version a station gets ---------------
+
+mod edge {
+    use super::*;
+    use ocpp_kit::engine::Backoff;
+    use ocpp_kit::transport::{BasicAuthPassword, DisconnectReason, Event, StationBuilder};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+
+    const PASSWORD: &str = "0123456789abcdef";
+
+    fn builder(port: u16, identity: &str, versions: &[Version]) -> StationBuilder {
+        Station::builder()
+            .identity(identity)
+            .unwrap()
+            .url(format!("ws://127.0.0.1:{port}/ocpp"))
+            .versions(versions.iter().copied())
+            .security_profile(SecurityProfile::BasicAuth)
+            .password(BasicAuthPassword::utf8(PASSWORD).unwrap())
+            .ping_interval(None)
+            .reconnect(false)
+            .handler(StationSide)
+    }
+
+    /// A CSMS serving 2.1 and 2.0.1 whose authenticator pins per identity:
+    /// `CS-PIN201` → 2.0.1, `CS-PIN16` → 1.6, `CS-WRONGPW` rejected, anything else admitted.
+    async fn pinning_csms(
+        configure: impl FnOnce(ocpp_kit::transport::CsmsBuilder) -> ocpp_kit::transport::CsmsBuilder,
+    ) -> (u16, CsmsHandle) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let csms = configure(
+            Csms::builder()
+                .bind(listener.local_addr().unwrap())
+                .versions([Version::V2_1, Version::V2_0_1])
+                .authenticate(|auth: Auth| async move {
+                    match auth.identity.as_str() {
+                        "CS-PIN201" => Admission::new().version(Version::V2_0_1).into(),
+                        "CS-PIN16" => Admission::new().version(Version::V1_6).into(),
+                        "CS-WRONGPW" => AuthOutcome::Reject,
+                        _ => AuthOutcome::accept(),
+                    }
+                })
+                .handler(ArcHandler(Arc::new(CsmsSide::new(
+                    v2_1::RegistrationStatus::Accepted,
+                ))))
+                .ping_interval(None),
+        )
+        .build()
+        .unwrap();
+        let handle = csms.handle();
+        tokio::spawn(async move {
+            let _ = csms.serve_on(listener).await;
+        });
+        (port, handle)
+    }
+
+    async fn next_refusal(
+        events: &mut tokio::sync::broadcast::Receiver<SessionEvent>,
+    ) -> (Option<Identity>, Refusal) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let SessionEvent::Refused {
+                    identity, reason, ..
+                } = events.recv().await.unwrap()
+                {
+                    return (identity, reason);
+                }
+            }
+        })
+        .await
+        .expect("a refusal arrived")
+    }
+
+    async fn next_opened(events: &mut tokio::sync::broadcast::Receiver<SessionEvent>) -> Version {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                match events.recv().await.unwrap() {
+                    SessionEvent::Opened { version, .. } => return version,
+                    SessionEvent::Refused { reason, .. } => panic!("refused: {reason}"),
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .expect("a session opened")
+    }
+
+    /// Writes a raw upgrade request and returns every byte the CSMS sent until it closed (or
+    /// went quiet for a second).
+    async fn raw(port: u16, request: &str) -> Vec<u8> {
+        let mut socket = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        socket.write_all(request.as_bytes()).await.unwrap();
+        let mut received = Vec::new();
+        let mut chunk = [0u8; 1024];
+        while let Ok(Ok(read)) =
+            tokio::time::timeout(Duration::from_secs(1), socket.read(&mut chunk)).await
+        {
+            if read == 0 {
+                break;
+            }
+            received.extend_from_slice(&chunk[..read]);
+        }
+        received
+    }
+
+    fn upgrade(identity: &str, protocol: &str, user: &str, password: &str) -> String {
+        use base64::Engine as _;
+        let credentials =
+            base64::engine::general_purpose::STANDARD.encode(format!("{user}:{password}"));
+        format!(
+            "GET /ocpp/{identity} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\n\
+             Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+             Sec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: {protocol}\r\n\
+             Authorization: Basic {credentials}\r\n\r\n"
+        )
+    }
+
+    // --- story 1: the station says why ---------------------------------------------------
+
+    /// SC-002: the cause is kept, not broadcast — asking after the fact never races.
+    #[tokio::test]
+    async fn edge_station_learns_why_after_the_fact_every_time() {
+        let port = {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            listener.local_addr().unwrap().port()
+        }; // nothing listens here any more
+        for _ in 0..1_000 {
+            let handle = builder(port, "CS-NOBODY", &[Version::V2_1])
+                .build()
+                .unwrap()
+                .spawn()
+                .unwrap();
+            while handle.ended().is_none() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            let late = handle.clone();
+            let ended = tokio::time::timeout(Duration::from_millis(100), late.closed())
+                .await
+                .expect("an ended station answers at once");
+            assert!(
+                matches!(&ended, Ended::ConnectFailed(e) if matches!(**e, TransportError::Io(_))),
+                "{ended}"
+            );
+            let ready = late.wait_ready().await.unwrap_err();
+            assert_eq!(ready.to_string(), ended.to_string());
+        }
+    }
+
+    /// A CSMS that completes the handshake without a subprotocol is named as the cause.
+    #[tokio::test]
+    async fn edge_station_names_a_missing_subprotocol() {
+        let (port, _csms) = pinning_csms(|b| b).await;
+        let handle = builder(port, "CS-OLD", &[Version::V1_6])
+            .password(BasicAuthPassword::hex("00112233445566778899aabbccddeeff").unwrap())
+            .build()
+            .unwrap()
+            .spawn()
+            .unwrap();
+        let ended = handle.wait_ready().await.unwrap_err();
+        assert!(
+            matches!(&ended, Ended::ConnectFailed(e)
+                if matches!(**e, TransportError::Negotiation(NegotiationError::NoSubprotocol))),
+            "{ended}"
+        );
+        assert_eq!(
+            ended.to_string(),
+            "could not connect: server did not select a WebSocket subprotocol (Part 4 §3.1.2)"
+        );
+        assert!(
+            std::error::Error::source(&ended).is_some(),
+            "the cause chains"
+        );
+    }
+
+    /// FR-003 / SR-001: every failed attempt is an event with its typed cause, before the
+    /// back-off — and nothing rendered contains the password.
+    #[tokio::test]
+    async fn edge_station_reports_every_failed_attempt_before_backing_off() {
+        let (port, _csms) = pinning_csms(|b| b).await;
+        let handle = builder(port, "CS-WRONGPW", &[Version::V2_1])
+            .reconnect(true)
+            .backoff(Backoff {
+                wait_minimum: Duration::from_millis(50),
+                random_range: Duration::ZERO,
+                repeat_times: 0,
+            })
+            .build()
+            .unwrap()
+            .spawn()
+            .unwrap();
+        let mut events = handle.events();
+        let mut failed = None;
+        let mut pairs = 0;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while pairs < 2 {
+                match events.recv().await.unwrap() {
+                    Event::ConnectFailed {
+                        attempt,
+                        configuration_slot,
+                        error,
+                    } => {
+                        assert!(matches!(*error, TransportError::Rejected { status: 401 }));
+                        assert_eq!(configuration_slot, 0);
+                        let text = format!("{error} {error:?}");
+                        assert!(!text.contains(PASSWORD), "{text}");
+                        failed = Some(attempt);
+                    }
+                    Event::Reconnecting { attempt, .. } if failed == Some(attempt) => {
+                        failed = None;
+                        pairs += 1;
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .expect("two failed attempts, each followed by its back-off");
+        assert!(
+            handle.ended().is_none(),
+            "a reconnecting station has not ended"
+        );
+    }
+
+    /// FR-001/FR-004: a session that ends with reconnect off ends the station with its
+    /// reason, and the CSMS-side handle reports the same thing the fleet event does.
+    #[tokio::test]
+    async fn edge_both_ends_of_a_session_say_how_it_ended() {
+        let (port, csms) = pinning_csms(|b| b).await;
+        let mut fleet = csms.events();
+        let station = builder(port, "CS-ENDS", &[Version::V2_1])
+            .build()
+            .unwrap()
+            .spawn()
+            .unwrap();
+        assert_eq!(next_opened(&mut fleet).await, Version::V2_1);
+        let identity = Identity::new("CS-ENDS").unwrap();
+        let session = csms.session(&identity).await.unwrap();
+
+        session.shutdown(Duration::from_secs(1)).await;
+        let at_csms = tokio::time::timeout(Duration::from_secs(5), session.closed())
+            .await
+            .unwrap();
+        assert!(at_csms.is_requested(), "{at_csms}");
+        let fleet_reason = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let SessionEvent::Closed { reason, .. } = fleet.recv().await.unwrap() {
+                    return reason;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(matches!(&at_csms, Ended::Disconnected(r) if *r == fleet_reason));
+
+        let at_station = tokio::time::timeout(Duration::from_secs(5), station.closed())
+            .await
+            .unwrap();
+        assert!(
+            matches!(
+                &at_station,
+                Ended::Disconnected(DisconnectReason::PeerClosed(_))
+            ),
+            "{at_station}"
+        );
+        assert!(!at_station.is_requested());
+    }
+
+    #[tokio::test]
+    async fn edge_a_drained_station_ended_on_request() {
+        let (port, csms) = pinning_csms(|b| b).await;
+        let mut fleet = csms.events();
+        let station = builder(port, "CS-DRAIN", &[Version::V2_1])
+            .reconnect(true)
+            .build()
+            .unwrap()
+            .spawn()
+            .unwrap();
+        next_opened(&mut fleet).await;
+        station.shutdown(Duration::from_secs(1)).await;
+        let ended = tokio::time::timeout(Duration::from_secs(5), station.closed())
+            .await
+            .unwrap();
+        assert!(ended.is_requested(), "{ended}");
+    }
+
+    // --- story 2: the CSMS decides the version -------------------------------------------
+
+    #[tokio::test]
+    async fn edge_pin_serves_the_pinned_version_over_the_station_preference() {
+        let (port, csms) = pinning_csms(|b| b).await;
+        let mut fleet = csms.events();
+        let _station = builder(port, "CS-PIN201", &[Version::V2_1, Version::V2_0_1])
+            .build()
+            .unwrap()
+            .spawn()
+            .unwrap();
+        assert_eq!(next_opened(&mut fleet).await, Version::V2_0_1);
+
+        // Without a pin, the station's preference among served versions.
+        let _other = builder(port, "CS-FREE", &[Version::V2_0_1, Version::V2_1])
+            .build()
+            .unwrap()
+            .spawn()
+            .unwrap();
+        assert_eq!(next_opened(&mut fleet).await, Version::V2_0_1);
+        let _newer = builder(port, "CS-FREE2", &[Version::V2_1, Version::V2_0_1])
+            .build()
+            .unwrap()
+            .spawn()
+            .unwrap();
+        assert_eq!(next_opened(&mut fleet).await, Version::V2_1);
+    }
+
+    #[tokio::test]
+    async fn edge_pin_refuses_a_station_that_did_not_offer_it() {
+        let (port, csms) = pinning_csms(|b| b).await;
+        let mut fleet = csms.events();
+        let station = builder(port, "CS-PIN201", &[Version::V2_1])
+            .build()
+            .unwrap()
+            .spawn()
+            .unwrap();
+        let (identity, reason) = next_refusal(&mut fleet).await;
+        assert_eq!(identity.unwrap().as_str(), "CS-PIN201");
+        assert!(
+            matches!(&reason, Refusal::VersionNotOffered { required: Version::V2_0_1, offered }
+                if offered == &[Version::V2_1]),
+            "{reason}"
+        );
+        assert_eq!(
+            reason.to_string(),
+            "the station must use OCPP 2.0.1 but offered [2.1]"
+        );
+        // The station sees what any version mismatch looks like.
+        let ended = station.closed().await;
+        assert!(
+            matches!(&ended, Ended::ConnectFailed(e)
+                if matches!(**e, TransportError::Negotiation(NegotiationError::NoSubprotocol))),
+            "{ended}"
+        );
+    }
+
+    /// SR-004: a pin to a version the CSMS does not serve never falls back to another one.
+    #[tokio::test]
+    async fn edge_pin_to_an_unserved_version_never_falls_back() {
+        let (port, csms) = pinning_csms(|b| b).await;
+        let mut fleet = csms.events();
+        let _station = builder(port, "CS-PIN16", &[Version::V2_1, Version::V1_6])
+            .build()
+            .unwrap()
+            .spawn()
+            .unwrap();
+        let (_, reason) = next_refusal(&mut fleet).await;
+        assert!(
+            matches!(
+                reason,
+                Refusal::VersionNotOffered {
+                    required: Version::V1_6,
+                    ..
+                }
+            ),
+            "{reason}"
+        );
+    }
+
+    /// SR-003: a pin refusal and a version mismatch are byte-identical on the wire.
+    #[tokio::test]
+    async fn edge_pin_refusal_looks_like_no_common_version() {
+        let (port, csms) = pinning_csms(|b| b).await;
+        let mut fleet = csms.events();
+        let pinned = raw(
+            port,
+            &upgrade("CS-PIN201", "ocpp2.1", "CS-PIN201", PASSWORD),
+        )
+        .await;
+        assert!(matches!(
+            next_refusal(&mut fleet).await.1,
+            Refusal::VersionNotOffered { .. }
+        ));
+        let unserved = raw(port, &upgrade("CS-ANY", "ocpp1.6", "CS-ANY", PASSWORD)).await;
+        assert!(matches!(
+            next_refusal(&mut fleet).await.1,
+            Refusal::NoCommonVersion { .. }
+        ));
+        assert!(
+            pinned.starts_with(b"HTTP/1.1 101"),
+            "{}",
+            String::from_utf8_lossy(&pinned)
+        );
+        assert_eq!(pinned, unserved);
+    }
+
+    // --- story 3: every refusal says why -------------------------------------------------
+
+    /// SR-003: both 401s are the same bytes to the peer, and different reasons to the operator.
+    #[tokio::test]
+    async fn edge_refusal_tells_a_username_mismatch_from_a_bad_password() {
+        let (port, csms) = pinning_csms(|b| b).await;
+        let mut fleet = csms.events();
+        let mismatch = raw(port, &upgrade("CS-ANY", "ocpp2.1", "CS-OTHER", PASSWORD)).await;
+        assert!(matches!(
+            next_refusal(&mut fleet).await.1,
+            Refusal::UsernameMismatch
+        ));
+        let wrong = raw(
+            port,
+            &upgrade("CS-WRONGPW", "ocpp2.1", "CS-WRONGPW", PASSWORD),
+        )
+        .await;
+        assert!(matches!(
+            next_refusal(&mut fleet).await.1,
+            Refusal::Rejected
+        ));
+        assert!(mismatch.starts_with(b"HTTP/1.1 401"));
+        assert_eq!(mismatch, wrong);
+    }
+
+    #[tokio::test]
+    async fn edge_refusal_names_every_handshake_defect() {
+        let (port, csms) = pinning_csms(|b| b.handshake_timeout(Duration::from_millis(200))).await;
+        let mut fleet = csms.events();
+
+        // No identity in the path.
+        raw(
+            port,
+            &upgrade("", "ocpp2.1", "x", PASSWORD).replace("/ocpp/ ", "/ "),
+        )
+        .await;
+        let (_, reason) = next_refusal(&mut fleet).await;
+        assert!(matches!(reason, Refusal::NoIdentity), "{reason}");
+        assert_eq!(reason.status(), Some(400));
+
+        // RFC 6455 §4.4: an unsupported WebSocket version gets 426.
+        raw(
+            port,
+            &upgrade("CS-ANY", "ocpp2.1", "CS-ANY", PASSWORD)
+                .replace("Sec-WebSocket-Version: 13", "Sec-WebSocket-Version: 8"),
+        )
+        .await;
+        let (_, reason) = next_refusal(&mut fleet).await;
+        assert!(
+            matches!(reason, Refusal::BadUpgrade { status: 426 }),
+            "{reason}"
+        );
+
+        // Opened a socket and said nothing: timed out, with no response.
+        let silent = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let (identity, reason) = next_refusal(&mut fleet).await;
+        assert!(matches!(reason, Refusal::TimedOut), "{reason}");
+        assert_eq!((identity, reason.status()), (None, None));
+        drop(silent);
+
+        // A malformed request: failed, and the peer's text is escaped (SR-002).
+        raw(port, "\x1b[31mPOST /ocpp/CS-ANY HTTP/1.1\r\n\r\n").await;
+        let (_, reason) = next_refusal(&mut fleet).await;
+        assert!(matches!(reason, Refusal::Failed(_)), "{reason}");
+        let line = reason.to_string();
+        assert!(!line.contains('\x1b') && !line.contains('\n'), "{line:?}");
+
+        // A TCP health probe — connect, close — is not a refusal.
+        drop(TcpStream::connect(("127.0.0.1", port)).await.unwrap());
+        let quiet =
+            tokio::time::timeout(Duration::from_millis(400), next_refusal(&mut fleet)).await;
+        assert!(quiet.is_err(), "a probe must not be reported: {quiet:?}");
+    }
+
+    #[tokio::test]
+    async fn edge_refusal_at_capacity() {
+        let (port, csms) = pinning_csms(|b| b.max_connections(0)).await;
+        let mut fleet = csms.events();
+        let reply = raw(port, &upgrade("CS-ANY", "ocpp2.1", "CS-ANY", PASSWORD)).await;
+        assert!(reply.starts_with(b"HTTP/1.1 503"));
+        assert!(matches!(
+            next_refusal(&mut fleet).await.1,
+            Refusal::AtCapacity
+        ));
+    }
+
+    /// With supersede off, the newer connection is closed with 1008 and reported.
+    #[tokio::test]
+    async fn edge_refusal_of_a_duplicate_closes_it_properly() {
+        let (port, csms) = pinning_csms(|b| b.supersede_existing(false)).await;
+        let mut fleet = csms.events();
+        let _first = builder(port, "CS-TWICE", &[Version::V2_1])
+            .build()
+            .unwrap()
+            .spawn()
+            .unwrap();
+        next_opened(&mut fleet).await;
+        let second = builder(port, "CS-TWICE", &[Version::V2_1])
+            .build()
+            .unwrap()
+            .spawn()
+            .unwrap();
+        let (identity, reason) = next_refusal(&mut fleet).await;
+        assert_eq!(identity.unwrap().as_str(), "CS-TWICE");
+        assert!(matches!(reason, Refusal::Duplicate), "{reason}");
+        let ended = tokio::time::timeout(Duration::from_secs(5), second.closed())
+            .await
+            .unwrap();
+        assert!(
+            matches!(&ended, Ended::Disconnected(DisconnectReason::PeerClosed(Some(frame)))
+                if frame.code == ocpp_kit::transport::CloseCode::POLICY
+                    && frame.reason == "already connected"),
+            "{ended}"
+        );
+    }
+
+    /// SR-005: refusals ride the bounded fleet channel; a subscriber that does not read is told
+    /// it lagged, and the stream keeps flowing.
+    #[tokio::test]
+    async fn edge_a_refusal_flood_lags_a_slow_subscriber_without_growing() {
+        let (port, csms) = pinning_csms(|b| b.max_connections(0)).await;
+        let mut idle = csms.events();
+        for _ in 0..1_100 {
+            raw(port, &upgrade("CS-ANY", "ocpp2.1", "CS-ANY", PASSWORD)).await;
+        }
+        match idle.recv().await {
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => assert!(missed > 0),
+            other => panic!("expected a lag notice, got {other:?}"),
+        }
+        let mut fresh = csms.events();
+        raw(port, &upgrade("CS-ANY", "ocpp2.1", "CS-ANY", PASSWORD)).await;
+        assert!(matches!(
+            next_refusal(&mut fresh).await.1,
+            Refusal::AtCapacity
+        ));
     }
 }

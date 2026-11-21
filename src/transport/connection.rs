@@ -149,6 +149,21 @@ pub enum Event {
         /// Where it points.
         url: String,
     },
+    /// A Charging Station's attempt to connect failed — sent for every failed attempt, before
+    /// [`Reconnecting`](Self::Reconnecting) when the station will try again.
+    ///
+    /// `error` is the typed cause: [`TransportError::Rejected`] with the HTTP status the CSMS
+    /// answered (401, 404), [`TransportError::Negotiation`] when it chose no subprotocol, an
+    /// I/O or TLS error otherwise. With reconnect off the same cause is also what
+    /// [`Handle::closed`] returns.
+    ConnectFailed {
+        /// How many attempts had failed before this one (0 for the first).
+        attempt: u32,
+        /// The network configuration slot that was tried.
+        configuration_slot: i32,
+        /// Why it failed.
+        error: Arc<TransportError>,
+    },
     /// A Charging Station is waiting before dialling again (Part 4 §5.4).
     Reconnecting {
         /// How many attempts have failed.
@@ -219,7 +234,9 @@ pub(crate) enum Command {
 /// tenant, an EVSE inventory — and the lookup is the same one every deployment writes. Doing
 /// it once, in the authenticator that had to look the station up anyway, and hanging the
 /// result here spares every handler a second map keyed on `Identity` and the question of what
-/// to do when it misses.
+/// to do when it misses. The authenticator puts it there with
+/// [`Admission::context`](super::Admission::context); handlers read it with
+/// [`Ctx::session`] and [`Handle::session`].
 ///
 /// ```
 /// # use ocpp_kit::transport::SessionContext;
@@ -278,9 +295,22 @@ pub(crate) struct Shared {
     pub commands: mpsc::Sender<Command>,
     pub events: broadcast::Sender<Event>,
     pub state: watch::Receiver<SessionState>,
+    /// Why the session ended: written once, read by every [`Handle`] clone.
+    pub ended: watch::Sender<Option<Ended>>,
 }
 
 impl Shared {
+    /// Records why the session ended. The first cause wins; later ones are ignored.
+    pub(crate) fn end(&self, cause: Ended) {
+        self.ended.send_if_modified(|slot| {
+            if slot.is_some() {
+                return false;
+            }
+            *slot = Some(cause);
+            true
+        });
+    }
+
     /// Publishes what leniency forgave in one payload. Nothing for a conforming one.
     pub(crate) fn report_repairs(&self, action: &str, id: &MessageId, repairs: Vec<Repair>) {
         if repairs.is_empty() {
@@ -445,19 +475,75 @@ impl Handle {
         self.shared.events.subscribe()
     }
 
-    /// Waits until the session is connected and the boot state machine allows traffic.
+    /// Waits until the session is connected and the boot state machine allows traffic — or
+    /// until it has ended, with why.
     ///
-    /// Returns `false` if the session ends first.
-    pub async fn wait_ready(&self) -> bool {
+    /// A station that reconnects keeps waiting through failed attempts (each one is an
+    /// [`Event::ConnectFailed`]); only the end of the station ends the wait.
+    ///
+    /// Readiness needs an accepted `BootNotification`, so send that first — or race the boot
+    /// call against [`closed`](Self::closed) to fail fast with the cause.
+    ///
+    /// ```no_run
+    /// # async fn example(handle: ocpp_kit::transport::Handle) -> Result<(), Box<dyn std::error::Error>> {
+    /// # use ocpp_kit::v2_1;
+    /// handle.call(v2_1::BootNotificationRequest::new(
+    ///     v2_1::ChargingStation::new("Model-1", "ACME"),
+    ///     v2_1::BootReason::PowerUp,
+    /// )).await?;
+    /// // Accepted — or "could not connect: …", "disconnected: …".
+    /// handle.wait_ready().await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn wait_ready(&self) -> Result<(), Ended> {
         let mut state = self.shared.state.clone();
+        let mut ended = self.shared.ended.subscribe();
         loop {
-            if state.borrow().connected && state.borrow().boot.allows_traffic() {
-                return true;
+            if let Some(cause) = ended.borrow_and_update().clone() {
+                return Err(cause);
             }
-            if state.changed().await.is_err() {
-                return false;
+            {
+                let now = state.borrow_and_update();
+                if now.connected && now.boot.allows_traffic() {
+                    return Ok(());
+                }
+            }
+            tokio::select! {
+                changed = state.changed() => {
+                    if changed.is_err() {
+                        return Err(self.closed().await);
+                    }
+                }
+                _ = ended.changed() => {}
             }
         }
+    }
+
+    /// Waits until the session has ended and says why.
+    ///
+    /// Every clone gets the same cause, however late it asks: the cause is kept, not
+    /// broadcast. A task that was aborted or panicked ends as [`Ended::Stopped`].
+    ///
+    /// ```no_run
+    /// # async fn example(handle: ocpp_kit::transport::Handle) {
+    /// match handle.closed().await {
+    ///     ended if ended.is_requested() => {}
+    ///     ended => eprintln!("station stopped: {ended}"),
+    /// }
+    /// # }
+    /// ```
+    pub async fn closed(&self) -> Ended {
+        let mut ended = self.shared.ended.subscribe();
+        match ended.wait_for(Option::is_some).await {
+            Ok(cause) => cause.clone().unwrap_or(Ended::Stopped),
+            Err(_) => Ended::Stopped,
+        }
+    }
+
+    /// Why the session ended, if it has — without waiting.
+    #[must_use]
+    pub fn ended(&self) -> Option<Ended> {
+        self.shared.ended.borrow().clone()
     }
 
     /// Sends a typed request and waits for the typed response.
@@ -714,8 +800,68 @@ impl fmt::Display for DisconnectReason {
     }
 }
 
+/// Why a session — or the attempt to open one — ended, as [`Handle::closed`] reports it.
+///
+/// ```
+/// # use ocpp_kit::transport::{DisconnectReason, Ended, TransportError};
+/// # use std::{sync::Arc, time::Duration};
+/// let lost = Ended::Disconnected(DisconnectReason::PongTimeout(Duration::from_secs(30)));
+/// assert_eq!(lost.to_string(), "disconnected: no pong within 30s of a WebSocket ping");
+/// let refused = Ended::ConnectFailed(Arc::new(TransportError::Rejected { status: 401 }));
+/// assert_eq!(refused.to_string(), "could not connect: the CSMS rejected the handshake with HTTP 401");
+/// ```
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub enum Ended {
+    /// A session was open, and ended for this reason.
+    Disconnected(DisconnectReason),
+    /// No session could be opened: the last attempt failed with this error.
+    ConnectFailed(Arc<TransportError>),
+    /// The task stopped without saying why — it was aborted, or it panicked.
+    Stopped,
+}
+
+impl Ended {
+    /// Whether the application asked for this end (a drain or a shutdown).
+    #[must_use]
+    pub const fn is_requested(&self) -> bool {
+        matches!(self, Self::Disconnected(reason) if reason.is_requested())
+    }
+}
+
+impl fmt::Display for Ended {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Disconnected(reason) => write!(f, "disconnected: {reason}"),
+            Self::ConnectFailed(error) => {
+                write!(f, "could not connect: {}", Escaped(&error.to_string()))
+            }
+            Self::Stopped => f.write_str("the session task stopped without a reason"),
+        }
+    }
+}
+
+impl std::error::Error for Ended {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::ConnectFailed(error) => Some(&**error),
+            _ => None,
+        }
+    }
+}
+
+/// Held by a session task: records [`Ended::Stopped`] if the task ends — by abort or panic —
+/// without having recorded anything better.
+pub(crate) struct EndGuard(pub Arc<Shared>);
+
+impl Drop for EndGuard {
+    fn drop(&mut self) {
+        self.0.end(Ended::Stopped);
+    }
+}
+
 /// Renders text a peer chose with every control character escaped, so it stays on one line.
-struct Escaped<'a>(&'a str);
+pub(crate) struct Escaped<'a>(pub &'a str);
 
 impl fmt::Display for Escaped<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1183,5 +1329,68 @@ impl<S: MessageStore> Driver<S> {
                 None => std::future::pending::<()>().await,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shared() -> Arc<Shared> {
+        let (commands, _) = mpsc::channel(1);
+        let (_, state) = watch::channel(SessionState {
+            connected: false,
+            version: Version::V2_1,
+            boot: BootState::Idle,
+            queued: 0,
+        });
+        Arc::new(Shared {
+            identity: Identity::new("CS-GUARD").unwrap(),
+            remote: None,
+            session: SessionContext::empty(),
+            decode: DecodeOptions::default(),
+            commands,
+            events: broadcast::channel(1).0,
+            state,
+            ended: watch::channel(None).0,
+        })
+    }
+
+    #[tokio::test]
+    async fn an_aborted_or_panicked_task_still_ends_its_handles() {
+        for panics in [false, true] {
+            let shared = shared();
+            let handle = Handle::new(shared.clone());
+            let guard = EndGuard(shared.clone());
+            let task = tokio::spawn(async move {
+                let _guard = guard;
+                assert!(!panics, "the session task failed");
+                std::future::pending::<()>().await;
+            });
+            if !panics {
+                task.abort();
+            }
+            let _ = task.await;
+            let ended = tokio::time::timeout(Duration::from_secs(1), handle.closed())
+                .await
+                .expect("closed() resolves");
+            assert!(matches!(ended, Ended::Stopped), "{ended}");
+            assert!(handle.wait_ready().await.is_err());
+        }
+    }
+
+    #[test]
+    fn the_first_cause_wins() {
+        let shared = shared();
+        shared.end(Ended::Disconnected(DisconnectReason::Idle(
+            Duration::from_secs(5),
+        )));
+        drop(EndGuard(shared.clone()));
+        shared.end(Ended::Stopped);
+        let handle = Handle::new(shared);
+        assert!(matches!(
+            handle.ended(),
+            Some(Ended::Disconnected(DisconnectReason::Idle(_)))
+        ));
     }
 }

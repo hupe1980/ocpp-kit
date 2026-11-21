@@ -71,9 +71,46 @@ jobs:
           name: footprint
           path: footprint.md
 
+  # The `ocpp` binary for the platforms the Homebrew formula serves; static on Linux.
+  cli:
+    name: ocpp (${{ matrix.target }})
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl, artifact: ocpp-linux-x86_64, musl: true }
+          - { os: ubuntu-latest, target: aarch64-unknown-linux-musl, artifact: ocpp-linux-aarch64, zigbuild: true }
+          - { os: macos-latest, target: aarch64-apple-darwin, artifact: ocpp-darwin-aarch64 }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - if: matrix.musl
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - if: matrix.zigbuild
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.13.0
+      - if: matrix.zigbuild
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+      - run: cargo ${{ matrix.zigbuild && 'zigbuild' || 'build' }} --release --locked --features cli --bin ocpp --target ${{ matrix.target }}
+      - name: package
+        run: |
+          mkdir dist
+          cp target/${{ matrix.target }}/release/ocpp dist/${{ matrix.artifact }}
+          tar -C dist -czf ${{ matrix.artifact }}.tar.gz ${{ matrix.artifact }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.tar.gz
+
   github-release:
     name: GitHub release
-    needs: [verify, publish, footprint]
+    needs: [verify, publish, footprint, cli]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -81,10 +118,79 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/download-artifact@v4
         with:
-          name: footprint
+          path: artifacts
+      # Plain file names, so `sha256sum -c checksums.txt` works next to the downloads.
+      - name: checksums
+        run: |
+          cp artifacts/footprint/footprint.md artifacts/ocpp-*/ocpp-*.tar.gz .
+          sha256sum ocpp-*.tar.gz > checksums.txt
+          cat checksums.txt
       - uses: softprops/action-gh-release@v2
         with:
           name: ocpp-kit ${{ needs.verify.outputs.version }}
           generate_release_notes: true
-          files: footprint.md
+          files: |
+            footprint.md
+            ocpp-*.tar.gz
+            checksums.txt
           prerelease: ${{ contains(github.ref_name, '-') }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: checksums
+          path: checksums.txt
+
+  # Formula/ocpp-kit.rb in hupe1980/homebrew-tap, for releases only. The `homebrew` environment
+  # holds HOMEBREW_APP_ID and HOMEBREW_APP_PRIVATE_KEY: a GitHub App installed on the tap only,
+  # with contents: write. Actions are pinned by commit because this job holds that token.
+  tap:
+    name: Homebrew tap
+    needs: [verify, github-release]
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    environment: homebrew
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: checksums
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        id: app-token
+        with:
+          app-id: ${{ secrets.HOMEBREW_APP_ID }}
+          private-key: ${{ secrets.HOMEBREW_APP_PRIVATE_KEY }}
+          owner: hupe1980
+          repositories: homebrew-tap
+          permission-contents: write
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: hupe1980/homebrew-tap
+          token: ${{ steps.app-token.outputs.token }}
+          path: tap
+          persist-credentials: true
+      - name: update the formula
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          mkdir -p tap/Formula
+          packaging/homebrew/formula.sh "$VERSION" checksums.txt > tap/Formula/ocpp-kit.rb
+          cd tap
+          if [ -n "$(git status --porcelain)" ]; then
+            git config user.name "ocpp-kit release"
+            git config user.email "ocpp-kit-release@users.noreply.github.com"
+            git add Formula/ocpp-kit.rb
+            git commit -m "ocpp-kit $VERSION"
+            git push
+          fi
+
+  # The published formula installs and passes its own test.
+  brew:
+    name: Homebrew install
+    needs: [verify, tap]
+    runs-on: macos-latest
+    steps:
+      - env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          brew install hupe1980/tap/ocpp-kit
+          brew test ocpp-kit
+          ocpp --version | grep -q "^ocpp $VERSION "

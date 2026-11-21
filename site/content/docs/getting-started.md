@@ -14,7 +14,7 @@ $ cargo add ocpp-kit --features tokio,rustls
 | Types and framing, on firmware | `v2_1`, with `--no-default-features` |
 | A charging station or a CSMS | `tokio`, plus `rustls` for TLS |
 | Domain building blocks | `station` and/or `csms` |
-| Everything, including `ocpp-cli` | `full` |
+| Everything, including `ocpp` | `full` |
 
 ## A charging station
 
@@ -55,6 +55,16 @@ let handle = Station::builder()
     .handler(MyStation)
     .build()?
     .spawn()?;
+
+// If the station cannot connect, say why — "the CSMS rejected the handshake with HTTP 401" —
+// rather than waiting on a call that cannot be sent.
+let watch = handle.clone();
+tokio::spawn(async move {
+    let ended = watch.closed().await;
+    if !ended.is_requested() {
+        eprintln!("station stopped: {ended}");
+    }
+});
 
 let boot = handle
     .call(v2_1::BootNotificationRequest::new(

@@ -26,12 +26,12 @@ mod tls;
 mod ws;
 
 pub use connection::{
-    BoxFuture, Ctx, DisconnectReason, Event, Handle, Handler, Keepalive, NotImplemented,
+    BoxFuture, Ctx, DisconnectReason, Ended, Event, Handle, Handler, Keepalive, NotImplemented,
     SessionContext, SessionState,
 };
 pub use csms::{
-    AcceptEveryStation, Auth, AuthOutcome, Authenticator, Csms, CsmsBuilder, CsmsHandle,
-    SessionEvent,
+    AcceptEveryStation, Admission, Auth, AuthOutcome, Authenticator, Csms, CsmsBuilder, CsmsHandle,
+    Refusal, SessionEvent,
 };
 pub use local_controller::{
     Direction, LocalController, LocalControllerBuilder, PassThrough, RefuseActions, Relay,
@@ -40,8 +40,8 @@ pub use local_controller::{
 pub use network_profile::{NetworkProfile, NetworkProfiles};
 pub use security::{
     AUTHORIZATION_KEY_MAX_BYTES, AUTHORIZATION_KEY_MIN_BYTES, BASIC_AUTH_INTEROPERABLE_MAX_LEN,
-    BASIC_AUTH_MAX_LEN, BASIC_AUTH_MIN_LEN, BasicAuthPassword, CredentialError, Credentials,
-    SecurityProfile, basic_auth_header, constant_time_eq,
+    BASIC_AUTH_MAX_LEN, BASIC_AUTH_MIN_LEN, BasicAuthPassword, ConfigurationValue, CredentialError,
+    Credentials, SecurityProfile, basic_auth_header, constant_time_eq,
 };
 pub use station::{Station, StationBuilder};
 pub use stream::MaybeTls;
@@ -112,7 +112,7 @@ pub enum TransportError {
     /// The CSMS rejected the handshake.
     Rejected {
         /// The HTTP status it answered with — 401 for bad credentials, 404 for an unknown
-        /// Charging Station identity (Part 4 §3.1.1).
+        /// Charging Station identity (Part 4 §3.2; §3.3 in 2.1).
         status: u16,
     },
     /// A credential does not satisfy the rules of the negotiated version.
@@ -131,7 +131,7 @@ impl fmt::Display for TransportError {
             TransportError::Io(error) => write!(f, "i/o error: {error}"),
             TransportError::WebSocket(error) => write!(f, "websocket error: {error}"),
             TransportError::Negotiation(error) => write!(f, "{error}"),
-            TransportError::Url(url) => write!(f, "unusable URL: {url}"),
+            TransportError::Url(url) => write!(f, "unusable URL: {}", without_userinfo(url)),
             TransportError::Rejected { status } => {
                 write!(f, "the CSMS rejected the handshake with HTTP {status}")
             }
@@ -140,6 +140,19 @@ impl fmt::Display for TransportError {
             TransportError::Store(error) => write!(f, "message store error: {error}"),
             TransportError::Closed => f.write_str("the session is closed"),
         }
+    }
+}
+
+/// `url` with any `user:password@` in its authority replaced by `***@`, so an error never
+/// prints a credential someone put in a URL.
+fn without_userinfo(url: &str) -> std::borrow::Cow<'_, str> {
+    let start = url.find("://").map_or(0, |i| i + 3);
+    let end = url[start..]
+        .find(['/', '?', '#'])
+        .map_or(url.len(), |i| start + i);
+    match url[start..end].rfind('@') {
+        Some(at) => format!("{}***{}", &url[..start], &url[start + at..]).into(),
+        None => url.into(),
     }
 }
 
@@ -180,5 +193,28 @@ impl From<CredentialError> for TransportError {
 impl From<crate::engine::StoreError> for TransportError {
     fn from(error: crate::engine::StoreError) -> Self {
         TransportError::Store(error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_url_error_never_prints_userinfo() {
+        let error = TransportError::Url("wss://cp1:s3cret@csms.example:443/ocpp".into());
+        assert_eq!(
+            error.to_string(),
+            "unusable URL: wss://***@csms.example:443/ocpp"
+        );
+        assert_eq!(
+            TransportError::Url("ftp://host/a@b".into()).to_string(),
+            "unusable URL: ftp://host/a@b",
+            "an @ in the path is not userinfo"
+        );
+        assert_eq!(
+            TransportError::Url("not a url".into()).to_string(),
+            "unusable URL: not a url"
+        );
     }
 }

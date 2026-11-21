@@ -16,7 +16,9 @@ use crate::types::Identity;
 use crate::version::{Subprotocol, Version};
 
 use super::TransportError;
-use super::connection::{Driver, Event, Handle, Handler, Keepalive, SessionState, Shared};
+use super::connection::{
+    Driver, EndGuard, Ended, Event, Handle, Handler, Keepalive, SessionState, Shared,
+};
 use super::network_profile::{NetworkProfile, NetworkProfiles, ProfileCycler};
 use super::security::{BasicAuthPassword, SecurityProfile, basic_auth_header};
 use super::stream::MaybeTls;
@@ -370,39 +372,45 @@ impl Station<MemStore> {
 }
 
 impl<S: MessageStore + Send + 'static> Station<S> {
-    /// Runs the station on the current task until it is shut down.
+    /// Runs the station on the current task until it stops, and says why.
     ///
     /// The engine — and therefore the offline queue and the boot state — survives every
     /// reconnect, which is what Part 4 §5.4 requires: a station does not repeat
     /// `BootNotification` on a mere reconnect.
-    pub async fn run(self) -> Result<(), TransportError> {
+    ///
+    /// # Errors
+    ///
+    /// Only when the station cannot start (its store failed). Why a running station stopped
+    /// — a refused connection with reconnect off, a lost session, a drain — is the [`Ended`].
+    pub async fn run(self) -> Result<Ended, TransportError> {
         let (handle, task) = self.into_parts()?;
         drop(handle);
-        task.await
+        Ok(task.await)
     }
 
     /// Spawns the station and returns a handle for calling the CSMS.
+    ///
+    /// The handle says why the station stopped: [`Handle::closed`], or
+    /// [`Handle::wait_ready`]'s error; each failed attempt is also an
+    /// [`Event::ConnectFailed`].
     pub fn spawn(self) -> Result<Handle, TransportError> {
         let (handle, task) = self.into_parts()?;
         tokio::spawn(async move {
-            if let Err(error) = task.await {
-                #[cfg(feature = "tracing")]
-                tracing::error!(%error, "charging station stopped");
-                let _ = error;
+            let ended = task.await;
+            #[cfg(feature = "tracing")]
+            if ended.is_requested() {
+                tracing::info!(%ended, "charging station stopped");
+            } else {
+                tracing::error!(%ended, "charging station stopped");
             }
+            let _ = ended;
         });
         Ok(handle)
     }
 
     fn into_parts(
         self,
-    ) -> Result<
-        (
-            Handle,
-            impl std::future::Future<Output = Result<(), TransportError>>,
-        ),
-        TransportError,
-    > {
+    ) -> Result<(Handle, impl std::future::Future<Output = Ended>), TransportError> {
         let (commands_tx, mut commands_rx) = mpsc::channel(64);
         let (events_tx, _) = broadcast::channel(256);
         let (state_tx, state_rx) = watch::channel(SessionState {
@@ -420,6 +428,7 @@ impl<S: MessageStore + Send + 'static> Station<S> {
             commands: commands_tx,
             events: events_tx,
             state: state_rx,
+            ended: watch::channel(None).0,
         });
         let handle = Handle::new(shared.clone());
 
@@ -436,6 +445,8 @@ impl<S: MessageStore + Send + 'static> Station<S> {
         let reconnect = self.reconnect;
 
         let task = async move {
+            // Aborted or panicked: the handle still learns that the station stopped.
+            let _guard = EndGuard(shared.clone());
             let mut attempt = 0u32;
             let mut cycler = ProfileCycler::new(&connector.profiles);
             let mut announced = None;
@@ -482,27 +493,34 @@ impl<S: MessageStore + Send + 'static> Station<S> {
                             .await;
                         if ended.is_requested() || !reconnect {
                             driver.abandon(&CallFailure::Disconnected);
-                            return Ok(());
+                            let ended = Ended::Disconnected(ended);
+                            shared.end(ended.clone());
+                            return ended;
                         }
                         #[cfg(feature = "tracing")]
                         tracing::info!(reason = %ended, slot, "the session ended; reconnecting");
                     }
                     Err(error) => {
+                        let error = Arc::new(error);
+                        let _ = shared.events.send(Event::ConnectFailed {
+                            attempt,
+                            configuration_slot: slot,
+                            error: error.clone(),
+                        });
                         if !reconnect {
-                            return Err(error);
+                            driver.abandon(&CallFailure::Disconnected);
+                            let ended = Ended::ConnectFailed(error);
+                            shared.end(ended.clone());
+                            return ended;
                         }
                         #[cfg(feature = "tracing")]
                         tracing::warn!(%error, attempt, slot, "connection to the CSMS failed");
-                        let _ = &error;
                         // `NetworkProfileConnectionAttempts`: after this profile's share of
                         // failures, move to the next slot in NetworkConfigurationPriority.
                         cycler.failed();
                     }
                 }
 
-                if !reconnect {
-                    return Ok(());
-                }
                 let delay = backoff.delay(attempt, jitter());
                 let _ = shared.events.send(Event::Reconnecting { attempt, delay });
                 attempt = attempt.saturating_add(1);
@@ -689,6 +707,14 @@ impl Endpoint {
         let uri: Uri = base
             .parse()
             .map_err(|_| TransportError::Url(base.to_owned()))?;
+        // `wss://id:secret@host/` would be parsed, the secret silently ignored and the URL
+        // echoed in events and errors. The password has its own place.
+        if uri.authority().is_some_and(|a| a.as_str().contains('@')) {
+            return Err(TransportError::Configuration(format!(
+                "configuration slot {slot}: the URL carries credentials; set them with \
+                 NetworkProfile::password, not in the URL"
+            )));
+        }
         let scheme = uri.scheme_str().unwrap_or("ws");
         let secure = match scheme {
             "ws" | "http" => false,
@@ -755,6 +781,19 @@ mod tests {
         assert_eq!(endpoint.url, "ws://localhost:9000/CS-0001");
         assert_eq!(endpoint.port, 9000);
         assert!(!endpoint.secure);
+    }
+
+    #[test]
+    fn a_url_with_credentials_is_refused_without_echoing_them() {
+        let identity = Identity::new("CS-0001").unwrap();
+        let Err(error) = Endpoint::parse(2, "wss://CS-0001:s3cret@csms.example/ocpp", &identity)
+        else {
+            panic!("userinfo must be refused");
+        };
+        let text = error.to_string();
+        assert!(matches!(error, TransportError::Configuration(_)), "{text}");
+        assert!(!text.contains("s3cret"), "{text}");
+        assert!(text.contains("NetworkProfile::password"), "{text}");
     }
 
     #[test]

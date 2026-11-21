@@ -391,7 +391,8 @@ impl VariableSpec {
         self
     }
 
-    /// Restricts a numeric variable to a range.
+    /// Restricts a numeric variable to a range — or, for a string or list type, `max` is its
+    /// maximum length in characters (`VariableCharacteristicsType.maxLimit`).
     ///
     /// The bounds are exact decimals, so a limit of `0.1` rejects exactly what it says it
     /// rejects — the device model's values are decimal *text* on the wire, and comparing
@@ -505,7 +506,7 @@ pub struct ReportDatum {
     pub values_list: Vec<String>,
     /// The lower numeric bound, if any.
     pub min_limit: Option<Decimal>,
-    /// The upper numeric bound, if any.
+    /// The upper numeric bound, or the maximum length of a string or list, if any.
     pub max_limit: Option<Decimal>,
     /// Whether the value survives a reboot.
     pub persistent: bool,
@@ -724,6 +725,29 @@ impl DeviceModel {
         }
         if !spec.data_type.accepts(value, &spec.values_list) {
             return SetStatus::Rejected;
+        }
+        // `VariableCharacteristicsType`: for these types `maxLimit` "defines the maximum length of
+        // the (CSV) string" — longer is out of range (B05.FR.08).
+        if matches!(
+            spec.data_type,
+            DataType::String | DataType::OptionList | DataType::SequenceList | DataType::MemberList
+        ) && spec.max_limit.is_some_and(|max| {
+            Decimal::from_i64(i64::try_from(value.chars().count()).unwrap_or(i64::MAX)) > max
+        }) {
+            return SetStatus::Rejected;
+        }
+        // A00.FR.205: a passwordString of 16 to maxLimit characters. Anything else is
+        // "incorrectly formatted" (B05.FR.07) — and would lock the station out at its next
+        // connect.
+        if component.name == "SecurityCtrlr" && variable.name == "BasicAuthPassword" {
+            let max = spec
+                .max_limit
+                .and_then(|max| max.trunc_to(0))
+                .and_then(|max| usize::try_from(max.mantissa()).ok())
+                .unwrap_or(crate::credentials::BASIC_AUTH_INTEROPERABLE_MAX_LEN);
+            if crate::credentials::check_password(value, max).is_err() {
+                return SetStatus::Rejected;
+            }
         }
         if matches!(spec.data_type, DataType::Integer | DataType::Decimal) {
             if let Ok(number) = value.parse::<Decimal>() {
@@ -946,7 +970,10 @@ fn defaults() -> Vec<(ComponentKey, VariableSpec)> {
         ),
         (
             ComponentKey::new("SecurityCtrlr"),
-            VariableSpec::new("BasicAuthPassword", Str).mutability(Mutability::WriteOnly),
+            // A00.FR.205: maxLimit "at least 40 characters and at most 64"; 40 interoperates.
+            VariableSpec::new("BasicAuthPassword", Str)
+                .mutability(Mutability::WriteOnly)
+                .limits(None, Some(Decimal::from(40))),
         ),
         (
             ComponentKey::new("SecurityCtrlr"),
@@ -1167,6 +1194,82 @@ mod tests {
         assert_eq!(
             model.set("OCPPCommCtrlr", "HeartbeatInterval", Attribute::MinSet, "1"),
             SetStatus::NotSupportedAttributeType
+        );
+    }
+
+    /// A00.FR.205 / B05.FR.07–08: a password the station could not present is refused.
+    #[test]
+    fn an_unusable_basic_auth_password_is_refused_and_the_old_one_kept() {
+        let mut model = DeviceModel::with_defaults();
+        let set = |model: &mut DeviceModel, value: &str| {
+            model.set(
+                "SecurityCtrlr",
+                "BasicAuthPassword",
+                Attribute::Actual,
+                value,
+            )
+        };
+        assert_eq!(set(&mut model, "a-valid-pw:16+chr"), SetStatus::Accepted);
+        assert_eq!(set(&mut model, &"a".repeat(40)), SetStatus::Accepted);
+        for unusable in [
+            "a".repeat(15),
+            "a".repeat(41),
+            "has spaces in it, sadly".to_owned(),
+            "0123456789abcde!".to_owned(),
+        ] {
+            assert_eq!(
+                set(&mut model, &unusable),
+                SetStatus::Rejected,
+                "{unusable:?}"
+            );
+        }
+        // Report says 40, and the station enforces what it reports.
+        let report = model.report(
+            ReportBase::FullInventory,
+            Some("SecurityCtrlr"),
+            Some("BasicAuthPassword"),
+        );
+        assert_eq!(report[0].max_limit, Some(Decimal::from(40)));
+    }
+
+    /// `VariableCharacteristicsType`: `maxLimit` of a string is its maximum length.
+    #[test]
+    fn a_string_longer_than_its_max_limit_is_refused() {
+        let mut model = DeviceModel::new();
+        model.declare(
+            ComponentKey::new("Ctrlr"),
+            VariableSpec::new("Label", DataType::String)
+                .mutability(Mutability::ReadWrite)
+                .limits(None, Some(Decimal::from(5))),
+        );
+        model.declare(
+            ComponentKey::new("Ctrlr"),
+            VariableSpec::new("Modes", DataType::MemberList)
+                .mutability(Mutability::ReadWrite)
+                .values(["a", "b", "c"])
+                .limits(None, Some(Decimal::from(3))),
+        );
+        assert_eq!(
+            model.set("Ctrlr", "Label", Attribute::Actual, "abcde"),
+            SetStatus::Accepted
+        );
+        assert_eq!(
+            model.set("Ctrlr", "Label", Attribute::Actual, "abcdef"),
+            SetStatus::Rejected
+        );
+        // Characters, not bytes.
+        assert_eq!(
+            model.set("Ctrlr", "Label", Attribute::Actual, "ääääa"),
+            SetStatus::Accepted
+        );
+        // The CSV string counts, separators included.
+        assert_eq!(
+            model.set("Ctrlr", "Modes", Attribute::Actual, "a,b"),
+            SetStatus::Accepted
+        );
+        assert_eq!(
+            model.set("Ctrlr", "Modes", Attribute::Actual, "a,b,c"),
+            SetStatus::Rejected
         );
     }
 

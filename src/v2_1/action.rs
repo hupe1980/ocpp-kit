@@ -772,7 +772,7 @@ impl Action {
 ///
 /// The round trip is the strongest cheap check that the generated types cover a payload
 /// completely: anything the types do not model is missing from the output. It backs
-/// `ocpp-cli validate` and the schema conformance suite.
+/// `ocpp validate` and the schema conformance suite.
 pub fn transcode_request(
     action: Action,
     payload: &RawValue,
