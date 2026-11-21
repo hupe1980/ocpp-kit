@@ -54,6 +54,10 @@ provisioned the way each version needs them. `ocpp` installs from Homebrew.
 - **Breaking:** the 1.6 `Wallbox` reports `meterStart`, `meterStop` and sampled energy registers
   as whole Wh, truncated, so a sample and a stop at the same instant agree.
 
+### Removed
+
+- The scheduled fuzz workflow. CI still builds every fuzz target; running them is local.
+
 ### Fixed
 
 - With `supersede_existing(false)` a duplicate connection was dropped without a close frame or an
