@@ -205,7 +205,7 @@ assert_eq!(bare.shape, PublicKeyShape::PrintedHex);
 assert_eq!(&bare.bytes[..2], &[0x30, 0x59]);
 ```
 
-[`ocpp-cli signed`](@/docs/cli.md) runs the same reader from a terminal, which is how to find
+[`ocpp signed`](@/docs/cli.md) runs the same reader from a terminal, which is how to find
 out what a station sends before writing an integration around a guess.
 
 **It is a claim, not a binding.** OCMF requires the public key to reach the customer out of

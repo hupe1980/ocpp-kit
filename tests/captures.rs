@@ -1,11 +1,11 @@
-//! A synthesised corpus of field quirks, replayed the way `ocpp-cli replay` replays a capture.
+//! A synthesised corpus of field quirks, replayed the way `ocpp replay` replays a capture.
 //!
 //! Every `tests/data/captures/<name>.ocppcap` has a `<name>.expect` beside it naming the OCPP
 //! version and, for strict and for lenient decoding, either `pass` or the line numbers that
 //! must report a problem. The captures are synthetic — made-up vendors, identities and tokens —
 //! and each one's header comment names the quirk it reproduces.
 //!
-//! `verdicts` restates what `replay` in `src/bin/ocpp-cli.rs` does per line: parse the frame,
+//! `verdicts` restates what `replay` in `src/bin/ocpp.rs` does per line: parse the frame,
 //! and for a CALL or SEND check the payload against the version's types. When the `cli`
 //! feature builds the binary, the binary itself is run as well and its per-line report must
 //! agree.
@@ -73,7 +73,7 @@ fn expectation(capture: &Path) -> Expectation {
     }
 }
 
-/// `transcode` in `src/bin/ocpp-cli.rs`, for requests.
+/// `transcode` in `src/bin/ocpp.rs`, for requests.
 fn check_request(
     version: Version,
     action: &str,
@@ -95,7 +95,7 @@ fn check_request(
     }
 }
 
-/// `replay` and `describe_frame` in `src/bin/ocpp-cli.rs`: the 1-based numbers of the lines
+/// `replay` and `describe_frame` in `src/bin/ocpp.rs`: the 1-based numbers of the lines
 /// that report a problem — a frame that does not parse, or a request payload that does not
 /// decode — each with the reason.
 fn verdicts(text: &str, version: Version, options: &DecodeOptions) -> Vec<(usize, String)> {
@@ -200,8 +200,8 @@ fn captures_carry_only_synthetic_identities() {
 /// The binary agrees with the restatement above, line for line. Only built with `cli`.
 #[test]
 fn the_cli_reports_the_same_lines() {
-    let Some(binary) = option_env!("CARGO_BIN_EXE_ocpp-cli") else {
-        eprintln!("ocpp-cli not built (needs the `cli` feature); skipping");
+    let Some(binary) = option_env!("CARGO_BIN_EXE_ocpp") else {
+        eprintln!("ocpp not built (needs the `cli` feature); skipping");
         return;
     };
     for capture in captures() {
@@ -215,7 +215,7 @@ fn the_cli_reports_the_same_lines() {
             if lenient {
                 command.arg("--lenient");
             }
-            let output = command.arg(&capture).output().expect("ocpp-cli runs");
+            let output = command.arg(&capture).output().expect("ocpp runs");
             let stdout = String::from_utf8_lossy(&output.stdout);
             let reported: BTreeSet<usize> = stdout
                 .lines()
@@ -241,11 +241,11 @@ fn the_cli_reports_the_same_lines() {
     }
 }
 
-/// `ocpp-cli replay` exits non-zero when any line reports a problem — a frame that does not
+/// `ocpp replay` exits non-zero when any line reports a problem — a frame that does not
 /// parse or a payload that does not decode.
 #[test]
 fn the_cli_exit_status_follows_the_expectation() {
-    let Some(binary) = option_env!("CARGO_BIN_EXE_ocpp-cli") else {
+    let Some(binary) = option_env!("CARGO_BIN_EXE_ocpp") else {
         return;
     };
     for capture in captures() {
@@ -259,11 +259,7 @@ fn the_cli_exit_status_follows_the_expectation() {
             if lenient {
                 command.arg("--lenient");
             }
-            let status = command
-                .arg(&capture)
-                .output()
-                .expect("ocpp-cli runs")
-                .status;
+            let status = command.arg(&capture).output().expect("ocpp runs").status;
             assert_eq!(
                 status.success(),
                 want.is_empty(),

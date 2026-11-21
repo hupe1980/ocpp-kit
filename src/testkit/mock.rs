@@ -260,16 +260,20 @@ pub struct MockStation {
 }
 
 impl MockStation {
-    /// Connects a station with the given identity to `url`.
+    /// Connects a station with the given identity to `url`, offering 2.1, 2.0.1 and 1.6 and
+    /// answering with the canned answers.
     ///
     /// Returns as soon as the session is spawned; the connection itself is established in the
-    /// background, exactly as a real station's is. Await the first call to know it is up.
+    /// background, exactly as a real station's is. Await the first call to know it is up — or
+    /// [`Handle::closed`] to learn why it never will be: unlike a real station, the mock does
+    /// not reconnect, so a refused connection ends it with the cause.
     pub fn connect(url: &str, identity: &str) -> Result<Self, TransportError> {
-        Self::connect_with(url, identity, default_answer)
+        Self::builder(identity).connect(url)
     }
 
-    /// Connects a station that answers the CSMS with `answer` — a [`Wallbox`](super::Wallbox),
-    /// typically, so a CSMS under test controls a simulated vehicle over a real socket.
+    /// Builds a station that offers fewer versions, or answers the CSMS its own way — a
+    /// [`Wallbox`](super::Wallbox), typically, so a CSMS under test controls a simulated
+    /// vehicle over a real socket.
     ///
     /// ```no_run
     /// # async fn example(url: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -278,47 +282,28 @@ impl MockStation {
     /// use ocpp_kit::rpc::CallError;
     /// use ocpp_kit::testkit::{MockStation, Wallbox};
     ///
-    /// let wallbox = Arc::new(Mutex::new(Wallbox::new(Version::V2_1, "2026-11-20T18:00:00Z".parse()?)));
-    /// let station = MockStation::connect_with(url, "CS-0001", {
-    ///     let wallbox = wallbox.clone();
-    ///     move |_, request| {
-    ///         let mut wallbox = wallbox.lock().map_err(|_| CallError::internal("poisoned"))?;
-    ///         wallbox
-    ///             .answer(request)
-    ///             .unwrap_or_else(|| Err(CallError::not_implemented(&request.action)))
-    ///     }
-    /// })?;
+    /// let wallbox = Arc::new(Mutex::new(Wallbox::new(Version::V1_6, "2026-11-20T18:00:00Z".parse()?)));
+    /// let station = MockStation::builder("CS-0001")
+    ///     .versions([Version::V1_6]) // a 1.6-only station
+    ///     .answer({
+    ///         let wallbox = wallbox.clone();
+    ///         move |_, request| {
+    ///             let mut wallbox = wallbox.lock().map_err(|_| CallError::internal("poisoned"))?;
+    ///             wallbox
+    ///                 .answer(request)
+    ///                 .unwrap_or_else(|| Err(CallError::not_implemented(&request.action)))
+    ///         }
+    ///     })
+    ///     .connect(url)?;
     /// # let _ = station; Ok(()) }
     /// ```
-    pub fn connect_with(
-        url: &str,
-        identity: &str,
-        answer: impl Fn(&Ctx, &IncomingRequest) -> Result<Box<RawValue>, CallError>
-        + Send
-        + Sync
-        + 'static,
-    ) -> Result<Self, TransportError> {
-        let recording = Arc::new(Recording {
-            seen: Mutex::new(Vec::new()),
-            identity: Identity::new(identity)
-                .map_err(|error| TransportError::Configuration(error.to_string()))?,
-            answer: Box::new(answer),
-        });
-        let handle = Station::builder()
-            .identity(identity)?
-            .url(url)
-            // Profile 1 is the only one that works over `ws://`, and A00.FR.203 makes the
-            // password mandatory even there; the mock CSMS accepts whatever it is given.
-            .security_profile(SecurityProfile::BasicAuth)
-            .password(
-                BasicAuthPassword::utf8("mock-station-secret")
-                    .map_err(TransportError::Credential)?,
-            )
-            .ping_interval(None)
-            .handler(SharedHandler(recording.clone()))
-            .build()?
-            .spawn()?;
-        Ok(Self { handle, recording })
+    #[must_use]
+    pub fn builder(identity: &str) -> MockStationBuilder {
+        MockStationBuilder {
+            identity: identity.to_owned(),
+            versions: vec![Version::V2_1, Version::V2_0_1, Version::V1_6],
+            answer: None,
+        }
     }
 
     /// The handle, for calling the CSMS.
@@ -381,6 +366,64 @@ impl MockStation {
     /// Drains and closes the session.
     pub async fn shutdown(&self, deadline: Duration) {
         self.handle.shutdown(deadline).await;
+    }
+}
+
+/// Builds a [`MockStation`].
+pub struct MockStationBuilder {
+    identity: String,
+    versions: Vec<Version>,
+    answer: Option<Box<Answer>>,
+}
+
+impl MockStationBuilder {
+    /// The versions to offer, most preferred first — `[Version::V1_6]` plays a 1.6-only
+    /// station.
+    #[must_use]
+    pub fn versions(mut self, versions: impl IntoIterator<Item = Version>) -> Self {
+        self.versions = versions.into_iter().collect();
+        self
+    }
+
+    /// Replaces the canned answers to the CSMS's calls.
+    #[must_use]
+    pub fn answer(
+        mut self,
+        answer: impl Fn(&Ctx, &IncomingRequest) -> Result<Box<RawValue>, CallError>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.answer = Some(Box::new(answer));
+        self
+    }
+
+    /// Connects to `url` in the background, as [`MockStation::connect`] does.
+    pub fn connect(self, url: &str) -> Result<MockStation, TransportError> {
+        let recording = Arc::new(Recording {
+            seen: Mutex::new(Vec::new()),
+            identity: Identity::new(&self.identity)
+                .map_err(|error| TransportError::Configuration(error.to_string()))?,
+            answer: self.answer.unwrap_or_else(|| Box::new(default_answer)),
+        });
+        let handle = Station::builder()
+            .identity(&self.identity)?
+            .url(url)
+            .versions(self.versions)
+            // Profile 1 is the only one that works over `ws://`, and A00.FR.203 makes the
+            // password mandatory even there; the mock CSMS accepts whatever it is given.
+            .security_profile(SecurityProfile::BasicAuth)
+            .password(
+                BasicAuthPassword::utf8("mock-station-secret")
+                    .map_err(TransportError::Credential)?,
+            )
+            .ping_interval(None)
+            // A test should see a failure and its cause, not a back-off.
+            .reconnect(false)
+            .handler(SharedHandler(recording.clone()))
+            .build()?
+            .spawn()?;
+        Ok(MockStation { handle, recording })
     }
 }
 

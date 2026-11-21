@@ -70,8 +70,9 @@ credentials are right but it will not connect":
 
 * **1.6** `AuthorizationKey` is a *hexadecimal string*. The octets it decodes to are the
   password.
-* **2.x** `BasicAuthPassword` is sent as UTF-8 — never hex- or base64-encoded — and is at
-  least 16 characters (A00.FR.205). The specification names no single maximum: the ceiling is
+* **2.x** `BasicAuthPassword` is sent as UTF-8 — never hex- or base64-encoded — and is a
+  `passwordString` of at least 16 characters (A00.FR.205): only `a-z A-Z 0-9 * - _ = : + | @ .`
+  (Part 2 §2.1.4). The specification names no single maximum: the ceiling is
   the `maxLimit` of the `BasicAuthPassword` variable, "which must be at least 40 characters
   and at most 64". `BASIC_AUTH_MAX_LEN` is therefore 64, and
   `BASIC_AUTH_INTEROPERABLE_MAX_LEN` is the 40 a station should stay under if it has to work
@@ -86,10 +87,48 @@ assert_eq!(legacy.as_bytes().len(), 16);
 
 let modern = BasicAuthPassword::utf8("0123456789abcdef").unwrap();
 assert_eq!(modern.as_bytes(), b"0123456789abcdef");
+
+// Outside passwordString: refused, naming the character.
+assert_eq!(
+    BasicAuthPassword::utf8("0123456789abcde!").unwrap_err(),
+    ocpp_kit::transport::CredentialError::Character('!'),
+);
 ```
 
 `BasicAuthPassword::for_version` picks the right one. The value is zeroized on drop, its
 `Debug` prints `<redacted>`, and `verify` compares in constant time.
+
+### Provisioning a station's password
+
+Both versions require a *randomly chosen* secret. `generate` draws one from the operating
+system — 20 random octets for 1.6 (the longest `AuthorizationKey`), 40 random `passwordString`
+characters for 2.x (the longest every CSMS's `maxLimit` admits), each character equally likely —
+and `configuration_value` is what you send the station, the inverse of `for_version`:
+
+```rust
+use ocpp_kit::transport::BasicAuthPassword;
+use ocpp_kit::Version;
+
+# fn provision() -> Result<(), ocpp_kit::transport::CredentialError> {
+let version = Version::V1_6;
+let password = BasicAuthPassword::generate(version)?;
+// ChangeConfiguration(AuthorizationKey, …) on 1.6, SetVariables(SecurityCtrlr.BasicAuthPassword, …)
+// on 2.x. Zeroized when dropped.
+let value = password.configuration_value(version)?;
+assert_eq!(value.len(), 40); // 20 octets as hex
+// Store the password; verify the station's next connection against it.
+assert!(password.verify(BasicAuthPassword::for_version(version, &value)?.as_bytes()));
+
+// A 1.6 key configured from a passphrase is the hex of its octets.
+let key = BasicAuthPassword::raw("sixteen-byte-key").configuration_value(Version::V1_6)?;
+assert_eq!(&*key, "7369787465656e2d627974652d6b6579");
+# Ok(()) }
+```
+
+On the station side, `ConfigurationKeys` rejects an `AuthorizationKey` that is not 16–20 octets of
+hex and `DeviceModel` a `BasicAuthPassword` that is not a `passwordString` within its `maxLimit`
+(40 by default). Both keep the old credential (1.6 Whitepaper A01), so a bad write cannot lock the
+station out. The checks themselves are `ocpp_kit::credentials`, available without the transport.
 
 The Charging Station identity may not contain `:` (A00.FR.204), because HTTP Basic could not
 represent it unambiguously. `Identity::new` rejects it, so it cannot reach the wire.
@@ -168,17 +207,20 @@ server.
 
 ## Handshake outcomes
 
-Part 4 §3.1.1 distinguishes them, and so does the CSMS here:
+Part 4 §3.2 (§3.3 in 2.1) and HTTP Basic distinguish them, and so does the CSMS here:
 
 | Outcome | HTTP | Meaning |
 |---|---|---|
-| `AuthOutcome::Accept(_)` | 101 | in you go — the payload is what the authenticator resolved; see [`SessionContext`](@/docs/transport.md) |
+| `AuthOutcome::Accept(admission)` | 101 | in you go — with what the authenticator resolved and, optionally, the version the station must use; see [`Admission`](@/docs/transport.md#what-the-authenticator-resolved-rides-the-session) |
 | `AuthOutcome::Reject` | **401** with `WWW-Authenticate` | the credentials are wrong |
 | `AuthOutcome::Unknown` | **404** | there is no such Charging Station |
-| no common subprotocol | 101 **without** the header, then an immediate close | we speak nothing in common |
+| no common subprotocol, or the pinned one not offered | 101 **without** the header, then an immediate close | we agree on nothing |
 
 The 401/404 distinction is what lets an operator tell a typo from a wrong password without
-reading server logs.
+reading server logs. The operator learns more than the peer: every refusal is a
+`SessionEvent::Refused` with a typed [`Refusal`](@/docs/transport.md#why-a-connection-was-refused)
+— a username mismatch and a wrong password are both 401 on the wire, and two different reasons
+in the event.
 
 ## The Local Controller's certificates
 

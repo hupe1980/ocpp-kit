@@ -38,12 +38,16 @@ spelling on every version, because peers mix them up.
 
 | | 1.6 (Security Whitepaper ed. 2) | 2.x |
 |---|---|---|
-| Basic-auth password | `AuthorizationKey`, a **hexadecimal** string; the decoded octets are the password | `BasicAuthPassword`, sent as **UTF-8**, at least 16 characters, ceiling between 40 and 64 (A00.FR.205) |
+| Basic-auth password | `AuthorizationKey`, a **hexadecimal** string; the decoded octets are the password | `BasicAuthPassword`, sent as **UTF-8**, a `passwordString` of at least 16 characters, ceiling between 40 and 64 (A00.FR.205) |
 | Identity must not contain `:` | yes | yes (A00.FR.204) |
 | Profiles | 1, 2, 3 | 1, 2, 3 (Part 2 §A 1.3 Table 12) |
 
-`BasicAuthPassword::for_version` builds the right one; getting this wrong is a silent
-authentication failure that looks like a network problem.
+`BasicAuthPassword::for_version` builds the right one and `configuration_value` renders it back;
+getting this wrong is a silent authentication failure that looks like a network problem.
+
+A CSMS that serves several versions picks one per station: the station lists them in order of
+preference (Part 4 §3.1.2), and the authenticator can pin the one the station is provisioned for
+with `Admission::version` — see [the transport](@/docs/transport.md#what-the-authenticator-resolved-rides-the-session).
 
 ## Transactions
 

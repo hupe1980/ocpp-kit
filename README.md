@@ -3,7 +3,7 @@
 [![crates.io](https://img.shields.io/crates/v/ocpp-kit.svg)](https://crates.io/crates/ocpp-kit)
 [![docs.rs](https://docs.rs/ocpp-kit/badge.svg)](https://docs.rs/ocpp-kit)
 [![CI](https://github.com/hupe1980/ocpp-kit/actions/workflows/ci.yml/badge.svg)](https://github.com/hupe1980/ocpp-kit/actions/workflows/ci.yml)
-[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#-license)
 
 An [Open Charge Point Protocol](https://openchargealliance.org/) toolkit for Rust —
 **OCPP 1.6J, 2.0.1 and 2.1** over JSON/WebSocket, for charging stations, CSMS backends and
@@ -16,7 +16,7 @@ local controllers.
 $ cargo add ocpp-kit --features tokio,rustls
 ```
 
-## Five layers
+## 🧱 Five layers
 
 | Layer | Module | What it gives you | `no_std` |
 |---|---|---|---|
@@ -32,7 +32,7 @@ $ cargo add ocpp-kit --features tokio,rustls
 With default features there is no async runtime, no TLS and no domain logic in your binary —
 just the types, the framing and the engine.
 
-## A charging station
+## 🔌 A charging station
 
 ```rust
 use ocpp_kit::transport::{BasicAuthPassword, ClientTls, Handler, SecurityProfile, Station};
@@ -51,12 +51,15 @@ async fn boot(handler: impl Handler) -> Result<(), Box<dyn std::error::Error>> {
         .build()?
         .spawn()?;
 
-    let boot = handle
-        .call(v2_1::BootNotificationRequest::new(
-            v2_1::ChargingStation::new("Model-1", "ACME"),
-            v2_1::BootReason::PowerUp,
-        ))
-        .await?;
+    let request = v2_1::BootNotificationRequest::new(
+        v2_1::ChargingStation::new("Model-1", "ACME"),
+        v2_1::BootReason::PowerUp,
+    );
+    let boot = tokio::select! {
+        boot = handle.call(request) => boot?,
+        // Stopped? Then say why: a 401, a missing subprotocol, a TLS error.
+        ended = handle.closed() => return Err(ended.into()),
+    };
 
     println!("{:?}, heartbeat every {}s", boot.status, boot.interval);
     Ok(())
@@ -78,9 +81,9 @@ $ cargo run --features full --example minimal_csms
 $ cargo run --features full --example minimal_station
 ```
 
-## Why another OCPP crate
+## ✨ Why another OCPP crate
 
-**Error codes are exact.** OCPP does not have one "bad payload" error; it has five, and
+🎯 **Error codes are exact.** OCPP does not have one "bad payload" error; it has five, and
 answering with the wrong one is a conformance failure that most implementations make. A
 missing member is an `OccurrenceConstraintViolation`, a string where an integer belongs is a
 `TypeConstraintViolation`, an over-long string is a `PropertyConstraintViolation`, a
@@ -90,13 +93,13 @@ non-object payload is a `FormatViolation` — spelled `FormationViolation` when 
 
 ```console
 $ echo '{"reason":"PowerUp","chargingStation":{"model":"a-model-name-that-is-far-too-long","vendorName":"ACME"}}' \
-    | ocpp-cli validate --action BootNotification
+    | ocpp validate --action BootNotification
 error: /chargingStation/model: maxLength 20 exceeded (got 32 characters)
   OCPP error code: PropertyConstraintViolation
   path: /chargingStation/model
 ```
 
-**The protocol logic has no I/O.** The engine is a pure state machine — feed it events with the
+🧪 **The protocol logic has no I/O.** The engine is a pure state machine — feed it events with the
 current instant, drain effects. Every timing rule in OCPP is therefore testable in microseconds
 rather than minutes, and the same code runs on Tokio, in an `embassy` firmware loop and in
 WebAssembly. The `thumbv7em-none-eabihf` build of L0–L4 is checked in CI.
@@ -118,17 +121,19 @@ assert_eq!(sim.failures().len(), 1);
 Time is a parameter of *every* entry point, not just the timer one — a deadline armed against
 a clock that has not moved since the last timer fired expires the moment it is armed.
 
-**Both sides, and the middle.** Charging Station, CSMS and the Part 4 chapter 6 Local
+🔁 **Both sides, and the middle.** Charging Station, CSMS and the Part 4 chapter 6 Local
 Controller are built from the same engine. The local controller opens one upstream connection
 per attached station under the station's own identity, propagates closes in both directions,
 and relays the OCPP-J text unchanged so signed messages survive.
 
-**The edge a CSMS shows the internet.** Authentication is `async` and answers 401 or 404; the
-Basic user must *be* the URL identity (A00.FR.204/207). `message_rate` refuses a flooding station
-before your handler, `idle_timeout` frees a peer that answers pings but never speaks OCPP, and one
-listener can serve profiles 2 and 3. Every session ends with a `DisconnectReason` you can match on.
+🛡️ **The edge a CSMS shows the internet.** Authentication is `async` and answers 401 or 404; the
+Basic user must *be* the URL identity (A00.FR.204/207); the authenticator can pin each station's
+version. `message_rate` and `idle_timeout` bound what an authenticated station does, and one
+listener serves profiles 2 and 3. Every refusal is a typed `Refusal`, every session ends with a
+`DisconnectReason`, and a station that cannot connect says why. `BasicAuthPassword::generate`
+provisions a password the station blocks will accept.
 
-**Controlling a wallbox, not just talking to it.** `per_phase(CURRENT_IMPORT)` reads a 1.6 and a
+⚡ **Controlling a wallbox, not just talking to it.** `per_phase(CURRENT_IMPORT)` reads a 1.6 and a
 2.1 station the same way. `ChargingPlan::to_profile` turns quarter-hour ceilings into one
 `TxProfile` within the station's limits that never exceeds the plan, and `smart_charging::v2x` does
 the same for 2.1 setpoints — discharge is a magnitude, so there is no sign to get wrong.
@@ -136,7 +141,7 @@ the same for 2.1 setpoints — discharge is a magnitude, so there is no sign to 
 answers the question a V2H planner has about a station's grid-code controls: which of the ones in
 effect can lower or stop the discharge it is counting on.
 
-**The value that pays for the electricity.** Under German calibration law a customer may only
+🧾 **The value that pays for the electricity.** Under German calibration law a customer may only
 be billed for a value they can check, which is the record the *meter* signed — not the
 protocol's own number, and often not even the same quantity: in the OCA's own example message
 a 1.6 `meterStop` is the meter's **lifetime** register while the signed record beside it
@@ -147,7 +152,7 @@ knows both of its hiding places: 1.6, which has no `signedMeterValue` field, put
 example. Both shapes are in the field; both are read, and the result says which arrived. See
 [signed meter values](https://hupe1980.github.io/ocpp-kit/docs/metering/).
 
-**Nothing that decides money fails silently.** A station that *claims* to send signed meter
+🚨 **Nothing that decides money fails silently.** A station that *claims* to send signed meter
 data and sends something unparseable looks, through a version-neutral view, exactly like one
 sending none — until a month of sessions turns out to be unbillable. Every such drop raises an
 `Observed::warnings` entry naming what arrived. The funnel also carries what a CDR needs and a
@@ -155,7 +160,7 @@ meter reading cannot supply: the `charging_state` — a register at zero is a ta
 station says `Charging` and an occupancy fee if it says `SuspendedEV` — and the EVSE or
 connector the session is at.
 
-**Numbers are exact, not `f64`.** Every OCPP `number` — a meter register, a charging limit, a
+🔢 **Numbers are exact, not `f64`.** Every OCPP `number` — a meter register, a charging limit, a
 2.1 tariff price — is a `types::Decimal`: a mantissa and a decimal scale. A meter reporting
 `2935.600` kWh is claiming three decimals of resolution, and it goes back out as `2935.600`;
 a session's energy, which OCPP *defines* as a difference of two registers, is that difference
@@ -165,19 +170,19 @@ reaches any public signature, and CI runs it. Exact is still not billable: `Reco
 returns a `RegisterDelta` whose number is spelled `unverified_wh()` and which carries the
 signed meter records a calibration-law billing chain settles on.
 
-**The types are checked against the schemas.** Every action's request and response is
+📐 **The types are checked against the schemas.** Every action's request and response is
 round-tripped through pseudo-random schema-valid payloads in CI, and the result is validated
 back against the official schema — 9 000+ round trips per run. The types cannot quietly drop
 a member, widen a constraint, or miss an enumeration value.
 
-**Every certification-profile action is driven, not just typed.** Schema round trips prove the
+✅ **Every certification-profile action is driven, not just typed.** Schema round trips prove the
 types match the schemas; they say nothing about whether an action dispatches. So every action
 OCPP 2.0.1 Part 5 names — all 76, across all eight profiles — is exercised as a real exchange
 over a socket, asserting the typed response on both sides. `cargo xtask coverage --profile all`
 reports it, and counts an action only when a test names its typed payload or puts it on the
 wire.
 
-**Compression, because 2.1 requires it.** Part 4 §3.4 Table 2 makes RFC 7692
+🗜️ **Compression, because 2.1 requires it.** Part 4 §3.4 Table 2 makes RFC 7692
 `permessage-deflate` **required** for a CSMS and a Local Controller. No general-purpose Rust
 WebSocket crate implements it — and RFC 6455 obliges a crate that does not to *reject* the
 `RSV1` bit a compressed message sets. So the frame layer is in this crate: a focused RFC 6455
@@ -186,7 +191,7 @@ fuzzed, and verified compressed on the wire. Framing costs ~110 ns per message, 
 `TransactionEvent` frame goes out at **5 % of its size** once the DEFLATE window has warmed up.
 See [the WebSocket layer](https://hupe1980.github.io/ocpp-kit/docs/websocket/).
 
-**Message-level signatures, and a policy you cannot forget.** With a Local Controller in the
+✍️ **Message-level signatures, and a policy you cannot forget.** With a Local Controller in the
 path, TLS proves you are talking to the *controller*, not the CSMS. Part 4 chapter 7's JWS
 signed messages — `<Action>-Signed`, the flattened JWS serialization, the `OCPPAction` /
 `OCPPMessageTypedId` / `x5t#S256` headers — are implemented, with `Signer` and `Verifier` as
@@ -196,7 +201,7 @@ traits so a key in a secure element never has to reach RAM.
 a check, because an intermediary can delete three JSON members and a name suffix and the
 receiver cannot tell.
 
-**Unsafe options are never the default.** A00.FR.207 requires the CSMS to validate that the
+🔒 **Unsafe options are never the default.** A00.FR.207 requires the CSMS to validate that the
 Basic username is the identity from the URL, so `Csms` answers 401 on a mismatch before your
 `Authenticator` sees it — left to the application it is a trap, since HTTP Basic hands you a
 username while the session is filed under the identity from the path. And a CSMS with no
@@ -204,13 +209,13 @@ authenticator does not build: accepting everyone is spelled `authenticate(Accept
 because a server that authenticates nobody looks exactly like one that authenticates everybody
 successfully.
 
-**The vocabulary, not just the messages.** The schemas define the messages; the appendix
+📚 **The vocabulary, not just the messages.** The schemas define the messages; the appendix
 defines what they talk about. `ocpp_kit::standard` carries the 21 security events *with their
 criticality* (and 1.6's own 21, from the Security Whitepaper), the 74 standardized components and their 458 variables *with their data types
 and units*, and the standardized reason codes — extracted from the specification, asserted by
 tests, and wired into the device model so a station gets them right without transcribing a PDF.
 
-**Version differences are modelled, not averaged.** They are real, and they are in the code
+🧬 **Version differences are modelled, not averaged.** They are real, and they are in the code
 with the citation next to them:
 
 | | 1.6J | 2.0.1 | 2.1 |
@@ -226,7 +231,7 @@ with the citation next to them:
 | Charging point | `connectorId`, no EVSEs | `evseId` | same |
 | Signed meter values | serialized into a `SignedData` sample's `value` **string** | `SampledValue.signedMeterValue` | same, with fewer required members |
 
-**You can test your own code with the tools this crate tests itself with.** `testkit` ships
+🧰 **You can test your own code with the tools this crate tests itself with.** `testkit` ships
 `Sim` and `Recorder` — what the protocol-rule tests here are written against — and mock
 peers that give you a working CSMS or Charging Station on a loopback port in one line:
 
@@ -242,7 +247,7 @@ assert!(csms.wait_for("BootNotification", Duration::from_secs(5)).await);
 # Ok(()) }
 ```
 
-**And a vehicle to test a controller against.** `testkit::Ev` reacts the way a car does — late,
+🚗 **And a vehicle to test a controller against.** `testkit::Ev` reacts the way a car does — late,
 not at all below 6 A, with a pause or a fault when the phases switch, stopping at its target — and
 `testkit::Wallbox` plugs it into a simulated EVSE that answers your CSMS's charging profiles and
 reports back, in 1.6, 2.0.1 or 2.1, on virtual time:
@@ -259,13 +264,13 @@ let reports = wallbox.advance(Duration::from_secs(8 * 3600));  // a night, in mi
 # Ok(()) }
 ```
 
-**A `SEND` cannot be awaited.** OCPP 2.1's `SEND` is never answered (Part 4 §4.2.4), so
+📤 **A `SEND` cannot be awaited.** OCPP 2.1's `SEND` is never answered (Part 4 §4.2.4), so
 `Handle::call` does not accept one — the bound is `Confirmed`, which the code generator
 implements for exactly the actions whose schemas define a response. Unconfirmed messages go
 through `Handle::send`, which returns when the frame is written. What would otherwise be a
 message timeout in production is a compile error.
 
-**Real-world tolerance is a policy, not a guess.** The strict default is exactly what the
+🤝 **Real-world tolerance is a policy, not a guess.** The strict default is exactly what the
 specification requires. `DecodeOptions::lenient()` additionally accepts the things field
 devices actually send — timestamps without an offset, `"42"` where a number belongs, enum
 values that are not in the schema — and it does so with a bounded *repair loop* that runs
@@ -274,31 +279,31 @@ repair is **reported**, by JSON pointer and kind, and a CSMS sees them for its w
 `SessionEvent::Repaired` — so tolerance is something an operator can count and take back to a
 vendor, not something that silently happens.
 
-**The schemas are the OCA's, checked.** `schemas/` holds the OCA packages byte for byte —
+📦 **The schemas are the OCA's, checked.** `schemas/` holds the OCA packages byte for byte —
 `cargo xtask schemas-check` fails CI on any difference — and where the specification text is
 stricter than a schema the generator applies a cited patch that fails once the schema is
 fixed. Each file's JSON Schema draft decides what `integer` means, so `20000.0` is accepted
 where draft-06 says it is an integer (2.x) and not where draft-04 says it is not (1.6 core).
 
-## `ocpp-cli`
+## 🛠️ `ocpp`
 
 ```console
-$ cargo install ocpp-kit --features cli
+$ brew install hupe1980/tap/ocpp-kit     # or: cargo install ocpp-kit --features cli
 
-$ ocpp-cli actions --version 2.1 --block R
+$ ocpp actions --version 2.1 --block R
 ACTION                               BLOCK                    KIND    DIRECTION
 ClearDERControl                      R                        CALL    CSMS -> CS
 GetDERControl                        R                        CALL    CSMS -> CS
 NotifyDERAlarm                       R                        CALL    CS  -> CSMS
 …
 
-$ ocpp-cli replay capture.ocppcap --version 2.1     # validate a whole capture
-$ ocpp-cli signed --key MzA1OTMwMTMw…                # read a signed meter value as a CSMS must
-$ ocpp-cli csms --bind 127.0.0.1:9000               # a mock CSMS
-$ ocpp-cli station --url ws://… --identity CS-0001  # a mock charging station
+$ ocpp replay capture.ocppcap --version 2.1     # validate a whole capture
+$ ocpp signed --key MzA1OTMwMTMw…                # read a signed meter value as a CSMS must
+$ ocpp csms --bind 127.0.0.1:9000               # a mock CSMS
+$ ocpp station --url ws://… --identity CS-0001  # a mock charging station
 ```
 
-## Feature flags
+## 🚩 Feature flags
 
 | Feature | Default | What it turns on |
 |---|---|---|
@@ -313,13 +318,13 @@ $ ocpp-cli station --url ws://… --identity CS-0001  # a mock charging station
 | `jws-es256` | – | A ready-made software ES256 signer and verifier |
 | `station`, `csms` | – | The L4 building blocks |
 | `tracing` | – | `tracing` spans and events in the transport |
-| `cli` | – | The `ocpp-cli` binary |
+| `cli` | – | The `ocpp` binary |
 | `full` | – | Everything above |
 
 `ocpp_kit::standard` — the security events, standardized components and reason codes — and
 `ocpp_kit::metering` are always available: protocol knowledge, not machinery.
 
-## Documentation
+## 📖 Documentation
 
 * [The guide](https://hupe1980.github.io/ocpp-kit/docs/) — layer by layer, with the
   specification citations
@@ -328,7 +333,7 @@ $ ocpp-cli station --url ws://… --identity CS-0001  # a mock charging station
   code targets
 * [`CHANGELOG.md`](CHANGELOG.md)
 
-## Development
+## 🧑‍💻 Development
 
 ```console
 $ cargo xtask codegen           # regenerate src/v1_6, src/v2_0_1, src/v2_1 from schemas/
@@ -348,7 +353,7 @@ $ cargo test --features full
 Generated code is committed, so building the crate needs neither the schemas nor a network
 connection, and a schema change shows up as a readable diff.
 
-## JSON schemas
+## 🗂️ JSON schemas
 
 The OCPP JSON schemas in [`schemas/`](schemas/) are published by the Open Charge Alliance and
 are redistributed unmodified — OCPP 1.6 (all files & errata) with the Security Whitepaper
@@ -356,7 +361,7 @@ edition 4, 2.0.1 edition 4, 2.1 edition 2 — and `schemas/SHA256SUMS` lists eve
 [`schemas/NOTICE`](schemas/NOTICE). They are **not** covered
 by this crate's license. The specification PDFs are not redistributed.
 
-## License
+## 📄 License
 
 Licensed under either of
 

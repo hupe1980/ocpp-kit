@@ -159,6 +159,14 @@ impl ConfigurationKeys {
         if name == "SecurityProfile" && !self.security_profile_change_allowed(value) {
             return ConfigurationStatus::Rejected;
         }
+        // Whitepaper A00.FR.205: 16–20 octets, hexadecimal. A key the station could not
+        // present would lock it out at the next connect; A01's failure postcondition is to
+        // refuse and "keep using the old credentials".
+        if name == "AuthorizationKey"
+            && crate::credentials::authorization_key_octets(value).is_err()
+        {
+            return ConfigurationStatus::Rejected;
+        }
         let Some(key) = self.keys.get_mut(name) else {
             return ConfigurationStatus::NotSupported;
         };
@@ -476,6 +484,37 @@ fn defaults() -> Vec<Key> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Whitepaper A00.FR.205 and A01: a key the station could not present is refused, and the
+    /// working key stays.
+    #[test]
+    fn an_unusable_authorization_key_is_refused_and_the_old_one_kept() {
+        use ConfigurationStatus::{Accepted, Rejected};
+        let mut config = ConfigurationKeys::with_defaults();
+        let working = "00112233445566778899aabbccddeeff";
+        assert_eq!(config.set("AuthorizationKey", working), Accepted);
+        for unusable in [
+            "zz",
+            "not-hex-at-all-but-long-enough!!",
+            &"ab".repeat(15),
+            &"ab".repeat(21),
+            "",
+        ] {
+            assert_eq!(
+                config.set("AuthorizationKey", unusable),
+                Rejected,
+                "{unusable:?}"
+            );
+        }
+        assert_eq!(
+            config
+                .get("AuthorizationKey")
+                .and_then(|key| key.value.as_deref()),
+            Some(working)
+        );
+        // Either case is hexadecimal.
+        assert_eq!(config.set("AuthorizationKey", &"AB".repeat(20)), Accepted);
+    }
 
     /// 1.6 Security Whitepaper edition 4, A05: up with prerequisites, down only 3 → 2 when
     /// allowed, never to 1.

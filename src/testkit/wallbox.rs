@@ -960,6 +960,17 @@ mod v16 {
         wb.out.push(Outgoing::new("StatusNotification", &request));
     }
 
+    /// 1.6 §6.45/§6.49: `meterStart` and `meterStop` are integers in Wh, so every register the
+    /// station reports is whole Wh — truncated, as a register counts: a Wh appears once it is
+    /// complete, and a billable figure never runs ahead of the energy delivered.
+    pub(super) fn whole_wh(register: Decimal) -> i32 {
+        int(register.trunc_to(0).unwrap_or(register))
+    }
+
+    fn is_register(measurand: &str) -> bool {
+        measurand.starts_with("Energy.") && measurand.ends_with(".Register")
+    }
+
     fn connector(wb: &Wallbox) -> i32 {
         i32::try_from(wb.evse_id).unwrap_or(1)
     }
@@ -973,7 +984,7 @@ mod v16 {
     pub(super) fn plug_in(wb: &mut Wallbox) {
         status(wb, "Preparing");
         let start =
-            w::StartTransactionRequest::new(connector(wb), ID_TAG, int(register(wb)), wb.now);
+            w::StartTransactionRequest::new(connector(wb), ID_TAG, whole_wh(register(wb)), wb.now);
         wb.out.push(Outgoing::new("StartTransaction", &start));
     }
 
@@ -995,7 +1006,13 @@ mod v16 {
         samples
             .iter()
             .map(|s| {
-                let mut value = w::SampledValue::new(s.value.to_string());
+                // One register value per instant: the same whole Wh `meterStop` carries.
+                let value = if is_register(s.measurand) {
+                    Decimal::from(whole_wh(s.value))
+                } else {
+                    s.value
+                };
+                let mut value = w::SampledValue::new(value.to_string());
                 value.measurand = Some(w::Measurand::from_wire(s.measurand));
                 value.phase = s.phase.map(w::Phase::from_wire);
                 value.unit = Some(w::UnitOfMeasure::from_wire(s.unit));
@@ -1030,7 +1047,7 @@ mod v16 {
         else {
             return;
         };
-        let mut request = w::StopTransactionRequest::new(int(register), at, id);
+        let mut request = w::StopTransactionRequest::new(whole_wh(register), at, id);
         request.reason = Some(w::Reason::EVDisconnected);
         request.id_tag = Some(ID_TAG.into());
         wb.out.push(Outgoing::new("StopTransaction", &request));

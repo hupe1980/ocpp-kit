@@ -11,6 +11,7 @@ extern crate std;
 mod macros;
 
 pub mod actions;
+pub mod credentials;
 #[cfg(feature = "csms")]
 pub mod csms;
 mod decimal;

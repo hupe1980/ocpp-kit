@@ -539,7 +539,7 @@ pub fn action(version: VersionId, model: &VersionModel) -> String {
         "impl Action {\n    /// Whether this action is answered at all.\n    ///\n    /// `false` only for a `SEND` (OCPP 2.1 `NotifyPeriodicEventStream`).\n    #[must_use]\n    pub const fn has_response(self) -> bool {\n        matches!(self.kind(), MessageKind::Call)\n    }\n}\n\n",
     );
     out.push_str(
-        "/// Decodes a request payload into its typed form and serializes it back.\n///\n/// The round trip is the strongest cheap check that the generated types cover a payload\n/// completely: anything the types do not model is missing from the output. It backs\n/// `ocpp-cli validate` and the schema conformance suite.\npub fn transcode_request(\n    action: Action,\n    payload: &RawValue,\n    options: &DecodeOptions,\n) -> Result<alloc::boxed::Box<RawValue>, DecodeError> {\n    match action {\n",
+        "/// Decodes a request payload into its typed form and serializes it back.\n///\n/// The round trip is the strongest cheap check that the generated types cover a payload\n/// completely: anything the types do not model is missing from the output. It backs\n/// `ocpp validate` and the schema conformance suite.\npub fn transcode_request(\n    action: Action,\n    payload: &RawValue,\n    options: &DecodeOptions,\n) -> Result<alloc::boxed::Box<RawValue>, DecodeError> {\n    match action {\n",
     );
     for m in &model.messages {
         let _ = writeln!(

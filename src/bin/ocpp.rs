@@ -1,12 +1,12 @@
-//! `ocpp-cli` — a small command-line tool for working with OCPP traffic.
+//! `ocpp` — a small command-line tool for working with OCPP traffic.
 //!
 //! ```text
-//! ocpp-cli actions  [--version 2.1] [--block K]      list the action set
-//! ocpp-cli validate [--version 2.1] --action X [--response] [FILE]
-//! ocpp-cli frame    [--version 2.1] [FILE]           explain an OCPP-J frame
-//! ocpp-cli replay   [--version 2.1] [--lenient] FILE  check a whole capture
-//! ocpp-cli csms     [--bind 127.0.0.1:9000]          run a mock CSMS
-//! ocpp-cli station  --url ws://… --identity CS-0001  run a mock Charging Station
+//! ocpp actions  [--version 2.1] [--block K]      list the action set
+//! ocpp validate [--version 2.1] --action X [--response] [FILE]
+//! ocpp frame    [--version 2.1] [FILE]           explain an OCPP-J frame
+//! ocpp replay   [--version 2.1] [--lenient] FILE  check a whole capture
+//! ocpp csms     [--bind 127.0.0.1:9000]          run a mock CSMS
+//! ocpp station  --url ws://… --identity CS-0001  run a mock Charging Station
 //! ```
 //!
 //! `FILE` may be `-`, which reads standard input.
@@ -45,7 +45,7 @@ fn main() -> ExitCode {
             print_usage();
             Ok(())
         }
-        other => Err(format!("unknown command {other:?}; try `ocpp-cli help`")),
+        other => Err(format!("unknown command {other:?}; try `ocpp help`")),
     };
 
     match result {
@@ -60,16 +60,16 @@ fn main() -> ExitCode {
 fn print_usage() {
     println!(
         "\
-ocpp-cli {version} — Open Charge Point Protocol tooling
+ocpp {version} — Open Charge Point Protocol tooling
 
 USAGE:
-  ocpp-cli actions  [--version 1.6|2.0.1|2.1] [--block <B>]
-  ocpp-cli validate [--version <V>] --action <A> [--response] [--lenient|--pedantic] [FILE]
-  ocpp-cli frame    [--version <V>] [FILE]
-  ocpp-cli replay   [--version <V>] [--lenient] <FILE>
-  ocpp-cli signed   [--key <PUBLICKEY>] [FILE]
-  ocpp-cli csms     [--bind <ADDR>] [--version <V>]...
-  ocpp-cli station  --url <URL> --identity <ID> [--password <PW>] [--version <V>]...
+  ocpp actions  [--version 1.6|2.0.1|2.1] [--block <B>]
+  ocpp validate [--version <V>] --action <A> [--response] [--lenient|--pedantic] [FILE]
+  ocpp frame    [--version <V>] [FILE]
+  ocpp replay   [--version <V>] [--lenient] <FILE>
+  ocpp signed   [--key <PUBLICKEY>] [FILE]
+  ocpp csms     [--bind <ADDR>] [--version <V>]...
+  ocpp station  --url <URL> --identity <ID> [--password <PW>] [--version <V>]...
 
 `signed` reads a SignedMeterValueType object — or a 1.6 SignedData `value` string —
 and reports the record and the public key as the station meant them.
@@ -466,7 +466,7 @@ fn run_station(args: &mut Args) -> Result<(), String> {
         // A mock station does the one thing every station must do first.
         let boot = handle
             .call(v2_1::BootNotificationRequest::new(
-                v2_1::ChargingStation::new("ocpp-cli", "ocpp-kit"),
+                v2_1::ChargingStation::new("ocpp", "ocpp-kit"),
                 v2_1::BootReason::PowerUp,
             ))
             .await
@@ -549,7 +549,7 @@ impl Args {
     /// nothing in the output would say so.
     fn finish(&self) -> Result<(), String> {
         match self.items.iter().find(|item| item.starts_with('-')) {
-            Some(unknown) => Err(format!("unknown option {unknown:?}; try `ocpp-cli help`")),
+            Some(unknown) => Err(format!("unknown option {unknown:?}; try `ocpp help`")),
             None => Ok(()),
         }
     }

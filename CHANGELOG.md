@@ -6,6 +6,64 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-11-21
+
+A station that cannot connect says why, a CSMS pins each station's version, and passwords are
+provisioned the way each version needs them. `ocpp` installs from Homebrew.
+
+### Added
+
+- `Handle::closed()` / `Handle::ended()`: why a session ended — `Ended::Disconnected(reason)`,
+  `ConnectFailed(Arc<TransportError>)` or `Stopped`. Every clone gets the cause, however late it
+  asks; the CSMS's per-station `Handle` has it too.
+- `Event::ConnectFailed { attempt, configuration_slot, error }` for every failed attempt, before
+  `Reconnecting`.
+- `Admission::version(v)`: the authenticator pins the version a station must use. Not offered or
+  not served → refused like a version mismatch (Part 4 §3.2; 2.1 §3.3).
+- `Refusal`: every refused connection is one `SessionEvent::Refused` with a typed reason and
+  `status()`, including handshakes that time out or fail TLS. The peer sees nothing new.
+- `BasicAuthPassword::generate(version)` and `configuration_value(version)` — the
+  `AuthorizationKey` hex or `BasicAuthPassword` text to send the station, as a redacted, zeroized
+  `ConfigurationValue`. A 1.6 key from a passphrase: `raw(passphrase).configuration_value(V1_6)`.
+- `ocpp_kit::credentials` (always compiled): `check_password`, `authorization_key_octets`,
+  `PASSWORD_STRING_CHARSET`.
+- `Decimal::trunc_to(scale)`.
+- `MockStation::builder(identity)` with `versions(..)` and `answer(..)`; `MockCsmsBuilder` and
+  `MockStationBuilder` are exported.
+- `brew install hupe1980/tap/ocpp-kit`; release binaries for macOS (arm64) and Linux
+  (x86_64, arm64) with `checksums.txt`.
+
+### Changed
+
+- **Breaking:** the binary `ocpp-cli` is `ocpp`.
+- **Breaking:** `Handle::wait_ready()` returns `Result<(), Ended>`: `assert!(h.wait_ready().await)`
+  → `h.wait_ready().await?`.
+- **Breaking:** `Station::run()` returns `Result<Ended, TransportError>`; a refused connection with
+  reconnect off is `Ok(Ended::ConnectFailed(_))`.
+- **Breaking:** `AuthOutcome::Accept(SessionContext::new(x))` → `Admission::new().context(x).into()`.
+- **Breaking:** `SessionEvent::Refused { status, .. }` → `Refused { reason, .. }`, `reason.status()`.
+- **Breaking:** a 2.x password outside `passwordString` (`a-z A-Z 0-9 * - _ = : + | @ .`) is refused
+  with `CredentialError::Character(c)`.
+- **Breaking:** a station URL carrying `user:password@` is refused at build; use
+  `NetworkProfile::password`. `TransportError::Url` never prints userinfo.
+- **Breaking:** the station blocks reject an `AuthorizationKey` that is not 16–20 octets of hex and
+  a `BasicAuthPassword` that is not a `passwordString` within `maxLimit` (declared 40), keeping the
+  old credential; `DeviceModel` enforces `maxLimit` as the length of string and list variables.
+- **Breaking:** `MockStation::connect_with(url, id, answer)` →
+  `MockStation::builder(id).answer(answer).connect(url)`; a mock station does not reconnect.
+- **Breaking:** the 1.6 `Wallbox` reports `meterStart`, `meterStop` and sampled energy registers
+  as whole Wh, truncated, so a sample and a stop at the same instant agree.
+
+### Removed
+
+- The scheduled fuzz workflow. CI still builds every fuzz target; running them is local.
+
+### Fixed
+
+- With `supersede_existing(false)` a duplicate connection was dropped without a close frame or an
+  event; it is closed with 1008 and reported as `Refusal::Duplicate`.
+- Citations: the no-subprotocol rule and the 404 are Part 4 §3.2 (2.1: §3.3); the 401 is HTTP Basic.
+
 ## [0.7.0] — 2026-11-21
 
 A vehicle to test a controller against, the 2.1 DER controls a station reports, and EV needs on
@@ -471,7 +529,8 @@ property tests over the engine, the ledger and the composite-schedule calculatio
 interop against an independent implementation; end-to-end tests over real sockets; four
 `cargo fuzz` targets; and `thumbv7em-none-eabihf` (`no_std`) and `wasm32` builds in CI.
 
-[Unreleased]: https://github.com/hupe1980/ocpp-kit/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/hupe1980/ocpp-kit/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/hupe1980/ocpp-kit/releases/tag/v0.8.0
 [0.7.0]: https://github.com/hupe1980/ocpp-kit/releases/tag/v0.7.0
 [0.6.0]: https://github.com/hupe1980/ocpp-kit/releases/tag/v0.6.0
 [0.5.0]: https://github.com/hupe1980/ocpp-kit/releases/tag/v0.5.0

@@ -33,8 +33,7 @@ A crash lands in `fuzz/artifacts/<target>/crash-<sha1>`. Reproduce with
 `cargo +nightly fuzz run <target> fuzz/artifacts/<target>/crash-<sha1>`, then copy the file to
 `tests/data/fuzz-regressions/<target>/` (a descriptive name is fine) and fix the bug.
 
-`.github/workflows/fuzz.yml` runs every target weekly for 20 minutes (manual runs take a
-budget), uploads crash inputs as an artifact, and offers the grown corpus back, minimised.
+CI builds every target on each push; running them is a local step, with the budget you choose.
 
 ## Regenerating the corpus
 

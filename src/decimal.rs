@@ -307,6 +307,35 @@ impl Decimal {
         })
     }
 
+    /// The value truncated toward zero at `scale`, or `None` on overflow or an out-of-range
+    /// scale.
+    ///
+    /// What a register does: it shows a unit only once the unit is complete, so a figure that
+    /// may be billed never runs ahead of what was delivered.
+    ///
+    /// ```
+    /// use ocpp_kit::types::Decimal;
+    /// let wh: Decimal = "1234.7".parse().unwrap();
+    /// assert_eq!(wh.trunc_to(0), Some(Decimal::from(1234)));
+    /// assert_eq!("-1.9".parse::<Decimal>().unwrap().trunc_to(0), Some(Decimal::from(-1)));
+    /// ```
+    #[must_use]
+    pub const fn trunc_to(self, scale: u8) -> Option<Self> {
+        if scale >= self.scale {
+            return self.rescale(scale);
+        }
+        let drop = (self.scale - scale) as u32;
+        if drop > 38 {
+            return Some(Self { mantissa: 0, scale });
+        }
+        // `i64 / 10^drop` truncates toward zero already; the divisor only overflows i64 past 18.
+        let divisor = pow10_i128(drop);
+        Some(Self {
+            mantissa: (self.mantissa as i128 / divisor) as i64,
+            scale,
+        })
+    }
+
     // -- arithmetic ---------------------------------------------------------
 
     /// The sum, at the larger of the two scales, or `None` on overflow.
@@ -1275,6 +1304,26 @@ macro_rules! decimal {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trunc_to_drops_toward_zero_and_never_rounds_up() {
+        let d = |s: &str| s.parse::<Decimal>().unwrap();
+        assert_eq!(d("1234.7").trunc_to(0), Some(d("1234")));
+        assert_eq!(d("1234.5").trunc_to(0), Some(d("1234")));
+        assert_eq!(d("1234.99999").trunc_to(2), Some(d("1234.99")));
+        assert_eq!(d("-1.9").trunc_to(0), Some(d("-1")));
+        assert_eq!(d("-0.5").trunc_to(0), Some(d("0")));
+        assert_eq!(d("12").trunc_to(2).map(Decimal::scale), Some(2));
+        assert!(d("12").trunc_to(2).unwrap().eq_exact(d("12.00")));
+        assert_eq!(
+            Decimal::new(i64::MAX, 18).trunc_to(0),
+            Some(Decimal::from(9))
+        );
+        assert_eq!(
+            Decimal::new(i64::MIN, 0).trunc_to(0),
+            Some(Decimal::new(i64::MIN, 0))
+        );
+    }
     use alloc::string::ToString;
 
     #[test]

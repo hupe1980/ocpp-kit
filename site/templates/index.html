@@ -48,8 +48,9 @@
     <article class="card">
       <h3>Transport</h3>
       <p>Charging station, CSMS and Part 4 chapter 6 local controller, on Tokio and
-      <code>rustls</code>, with security profiles 0 (1.6 only) to 3, network failover, and a
-      CSMS edge bounded by message rate and idle timeout.</p>
+      <code>rustls</code>, with security profiles 0 (1.6 only) to 3, network failover, a version
+      pinned per station, and a CSMS edge bounded by message rate and idle timeout. Every refusal
+      and every failed connect says why.</p>
       <a href="{{ get_url(path='@/docs/transport.md') }}">Layer 3 →</a>
     </article>
     <article class="card">
@@ -84,6 +85,8 @@
         does not repeat <code>BootNotification</code>.</li>
         <li>Transaction messages are retried on the linear schedule §3.7.1 defines, in
         chronological order, and queued durably while offline.</li>
+        <li>A station that cannot connect says why — a 401, a missing subprotocol, a TLS
+        error — on its handle and on every failed attempt.</li>
       </ul>
     </div>
   </div>

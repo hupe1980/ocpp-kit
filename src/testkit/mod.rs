@@ -34,4 +34,4 @@ pub use wallbox::{ID_TAG, Outgoing, Wallbox};
 mod mock;
 
 #[cfg(feature = "tokio")]
-pub use mock::{Exchange, MockCsms, MockStation};
+pub use mock::{Exchange, MockCsms, MockCsmsBuilder, MockStation, MockStationBuilder};
